@@ -1,4 +1,5 @@
 ---
+const { roomName } = Astro.props;
 ---
 
 <!-- Custom styles -->
@@ -179,4 +180,8 @@
 </div>
 
 <script  src="https://cdn.jsdelivr.net/npm/livekit-client/dist/livekit-client.umd.min.js"></script>
+<script define:vars={{ roomName }}>
+  // Pass the roomName to the JavaScript
+  window.roomNameFromPath = roomName;
+</script>
 <script  src="./videoConference.js"></script>

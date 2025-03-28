@@ -83,13 +83,14 @@ async function init() {
     // Setup event listeners
     setupEventListeners();
     
-    // Check for URL parameters (for direct room joining)
-    const urlParams = new URLSearchParams(window.location.search);
-    const roomParam = urlParams.get('room');
-    if (roomParam) {
-      roomInput.value = roomParam;
+    // Check for room name from path-based routing
+    const roomNameFromPath = window.roomNameFromPath;
+
+    if (roomNameFromPath) {
+      console.log('Room name from path:', roomNameFromPath);
+      roomInput.value = roomNameFromPath;
       
-      // Auto-connect if room is specified in URL
+      // Auto-connect if room is specified in URL path
       const username = localStorage.getItem('livekit-username') || '';
       if (username) {
         usernameInput.value = username;
@@ -97,6 +98,23 @@ async function init() {
         setTimeout(() => {
           joinBtn.click();
         }, 500);
+      }
+    } else {
+      // Fallback to query parameters for backward compatibility
+      const urlParams = new URLSearchParams(window.location.search);
+      const roomParam = urlParams.get('room');
+      if (roomParam) {
+        roomInput.value = roomParam;
+
+        // Auto-connect if room is specified in URL
+        const username = localStorage.getItem('livekit-username') || '';
+        if (username) {
+          usernameInput.value = username;
+          // Auto-join after a short delay to allow UI to initialize
+          setTimeout(() => {
+            joinBtn.click();
+          }, 500);
+        }
       }
     }
     
@@ -138,10 +156,13 @@ function setupEventListeners() {
     try {
       await joinRoom(username, roomName);
       
-      // Update URL with room parameter without reloading the page
-      const url = new URL(window.location);
-      url.searchParams.set('room', roomName);
-      window.history.pushState({}, '', url);
+      // Check if we're already using path-based routing
+      const isPathBasedRouting = window.roomNameFromPath !== undefined;
+
+      if (!isPathBasedRouting) {
+        // Redirect to the path-based URL
+        window.location.href = `/room/${encodeURIComponent(roomName)}`;
+      }
     } catch (error) {
       console.error('[ERROR] Error connecting to room:', error);
       showToast('Failed to connect: ' + (error.message || 'Unknown error'));
@@ -347,18 +368,26 @@ function setupEventListeners() {
   // Invite link
   inviteBtn.addEventListener('click', () => {
     try {
-      const inviteLink = window.location.origin + window.location.pathname + '?room=' + encodeURIComponent(currentRoom);
+      if (!currentRoom) {
+        showToast('You must join a room first');
+        return;
+      }
+
+      // Generate path-based invite link
+      const inviteLink = `${window.location.origin}/room/${encodeURIComponent(currentRoom)}`;
+
+      // Copy to clipboard
       navigator.clipboard.writeText(inviteLink)
         .then(() => {
           showToast('Invite link copied to clipboard');
         })
-        .catch(err => {
-          console.error('Could not copy invite link:', err);
+        .catch(error => {
+          console.error('Failed to copy invite link:', error);
           showToast('Failed to copy invite link');
         });
     } catch (error) {
-      console.error('Error copying invite link:', error);
-      showToast('Failed to copy invite link');
+      console.error('Error generating invite link:', error);
+      showToast('Error generating invite link');
     }
   });
   
@@ -870,7 +899,6 @@ async function joinRoom(username, roomName) {
           } 
           // Method 2: Try alternative ways to count participants
           else if (room.participants) {
-            // Try to count participants from the object
             try {
               if (Array.isArray(room.participants)) {
                 remoteParticipantCount = room.participants.length;

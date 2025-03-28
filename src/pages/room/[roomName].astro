@@ -1,0 +1,11 @@
+---
+import Layout from '../../layouts/Layout.astro';
+import VideoConference from '../../components/VideoConference.astro';
+
+// Get the room name from the URL parameter
+const { roomName } = Astro.params;
+---
+
+<Layout title={`LiveKit Video Conference - ${roomName}`}>
+  <VideoConference roomName={roomName} />
+</Layout>
