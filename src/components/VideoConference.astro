@@ -5,7 +5,7 @@ import PreJoin from './PreJoin.astro';
 ---
 
 <!-- Connection status banner -->
-<div id="status-banner" class="hidden bg-blue-600 text-white text-center py-2">
+<div id="status-banner" class="bg-blue-600 text-white text-center py-2 hidden">
   <span id="status-text">Connecting...</span>
 </div>
 
@@ -16,15 +16,13 @@ import PreJoin from './PreJoin.astro';
 
 <!-- Control bar -->
 <div class="bg-gray-800 p-3 flex justify-center items-center gap-4">
-  <!-- Device selection dropdowns -->
-  <div class="flex gap-2 mr-4">
-    <select id="audio-input" class="bg-gray-700 text-white rounded px-2 py-1 text-sm" aria-label="Select microphone">
-      <option value="">Loading...</option>
-    </select>
-    <select id="video-input" class="bg-gray-700 text-white rounded px-2 py-1 text-sm" aria-label="Select camera">
-      <option value="">Loading...</option>
-    </select>
-  </div>
+  <!-- Settings button - NEW -->
+  <button id="settings-btn" class="w-12 h-12 rounded-full bg-gray-700 hover:bg-gray-600 flex items-center justify-center" aria-label="Settings">
+    <svg class="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"></path>
+      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path>
+    </svg>
+  </button>
 
   <button id="mic-btn" class="w-12 h-12 rounded-full bg-gray-700 hover:bg-gray-600 flex items-center justify-center" aria-label="Toggle microphone">
     <svg id="mic-icon" class="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -52,12 +50,6 @@ import PreJoin from './PreJoin.astro';
     </svg>
   </button>
 
-  <button id="layout-btn" class="w-12 h-12 rounded-full bg-gray-700 hover:bg-gray-600 flex items-center justify-center disabled opacity-50" aria-label="Toggle layout" disabled>
-    <svg class="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zm10 0a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zm10 0a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z"></path>
-    </svg>
-  </button>
-  
   <button id="invite-btn" class="w-12 h-12 rounded-full bg-gray-700 hover:bg-gray-600 flex items-center justify-center" aria-label="Copy invite link">
     <svg class="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
       <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m0 0h2a2 2 0 012 2v3m2 4H10m0 0l3-3m-3 3l3 3"></path>
@@ -71,6 +63,77 @@ import PreJoin from './PreJoin.astro';
   </button>
 </div>
 
+<!-- Settings popup -->
+<div id="settings-popup" class="fixed inset-0 bg-black bg-opacity-50 z-50 hidden">
+  <div class="bg-gray-900 text-white rounded-lg max-w-md w-full mx-4 absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 overflow-hidden">
+    <!-- Tabs -->
+    <div class="flex border-b border-gray-700">
+      <button id="media-devices-tab" class="py-4 px-5 text-lg font-medium border-b-2 border-blue-500 flex-1 text-left">Media Devices</button>
+      <button id="effects-tab" class="py-4 px-5 text-lg font-medium border-b-2 border-transparent flex-1 text-left text-gray-400 hover:text-white">Effects</button>
+    </div>
+    
+    <!-- Media Devices Tab Content -->
+    <div id="media-devices-content" class="p-5 space-y-8">
+      <!-- Camera Section -->
+      <div>
+        <h3 class="text-xl mb-4">Camera</h3>
+        <div class="bg-gray-800 rounded-md p-3">
+          <select id="video-input" class="w-full bg-transparent text-white text-lg py-2 focus:outline-none appearance-none cursor-pointer">
+            <option value="">Loading...</option>
+          </select>
+          <div class="absolute right-4 top-1/2 transform -translate-y-1/2 pointer-events-none">
+            <svg class="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path>
+            </svg>
+          </div>
+        </div>
+      </div>
+      
+      <!-- Microphone Section -->
+      <div>
+        <h3 class="text-xl mb-4">Microphone Selection</h3>
+        <div class="bg-gray-800 rounded-md p-3">
+          <select id="audio-input" class="w-full bg-transparent text-white text-lg py-2 focus:outline-none appearance-none cursor-pointer">
+            <option value="">Loading...</option>
+          </select>
+          <!-- <div class="absolute right-4 top-1/2 transform -translate-y-1/2 pointer-events-none">
+            <svg class="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path>
+            </svg>
+          </div> -->
+        </div>
+      </div>
+      
+      <!-- Speaker & Headphones Section -->
+      <div>
+        <h3 class="text-xl mb-4">Speaker & Headphones</h3>
+        <div class="bg-gray-800 rounded-md p-3">
+          <select id="audio-output" class="w-full bg-transparent text-white text-lg py-2 focus:outline-none appearance-none cursor-pointer">
+            <option value="">Default</option>
+          </select>
+          <div class="absolute right-4 top-1/2 transform -translate-y-1/2 pointer-events-none">
+            <svg class="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path>
+            </svg>
+          </div>
+        </div>
+      </div>
+    </div>
+    
+    <!-- Effects Tab Content (Hidden by default) -->
+    <div id="effects-content" class="p-5 hidden">
+      <p class="text-gray-400">No effects available at this time.</p>
+    </div>
+    
+    <!-- Footer -->
+    <div class="flex justify-end p-4 border-t border-gray-700">
+      <button id="close-settings" class="px-6 py-2 text-lg bg-gray-700 hover:bg-gray-600 rounded-md">
+        Close
+      </button>
+    </div>
+  </div>
+</div>
+
 <!-- PreJoin component (connect modal) -->
 <PreJoin roomName={roomName} />
 
@@ -81,9 +144,9 @@ import PreJoin from './PreJoin.astro';
   </div>
 </div>
 
-<script  src="https://cdn.jsdelivr.net/npm/livekit-client/dist/livekit-client.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/livekit-client/dist/livekit-client.umd.min.js"></script>
 <script define:vars={{ roomName }}>
   // Pass the roomName to the JavaScript
   window.roomNameFromPath = roomName;
 </script>
-<script  src="./videoConference.js"></script>
+<script src="./videoConference.js"></script>

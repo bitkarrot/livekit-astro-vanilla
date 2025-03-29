@@ -4,9 +4,10 @@ let isReconnecting = false;
 
 // DOM elements - wait for DOM to be fully loaded before accessing
 let connectModal, permissionsWarning, joinBtn, usernameInput, roomInput;
-let participantsContainer, micBtn, cameraBtn, screenBtn, inviteBtn, leaveBtn, layoutBtn;
+let participantsContainer, micBtn, cameraBtn, screenBtn, inviteBtn, leaveBtn, settingsBtn;
 let micIcon, micOffIcon, cameraIcon, cameraOffIcon, statusBanner, statusText;
-let audioInputSelect, videoInputSelect, toast, toastMessage;
+let audioInputSelect, videoInputSelect, audioOutputSelect, toast, toastMessage;
+let settingsPopup, closeSettingsBtn, mediaDevicesTab, effectsTab, mediaDevicesContent, effectsContent;
 
 // State
 let micEnabled = false;
@@ -16,9 +17,7 @@ let currentRoom = '';
 let audioAnalysers = new Map();
 let roomEventsBound = false;
 let participantRefreshInterval = null;
-let initialGridUpdateDone = false; // New variable to track initial grid update
-let isFocusLayout = false; // Track if we're in focus layout mode
-let activeScreenShareId = null; // Track the active screen share participant ID
+let activeScreenShareId = null;
 
 // Initialize the application
 document.addEventListener('DOMContentLoaded', init);
@@ -36,9 +35,9 @@ async function init() {
   micBtn = document.getElementById('mic-btn');
   cameraBtn = document.getElementById('camera-btn');
   screenBtn = document.getElementById('screen-btn');
-  layoutBtn = document.getElementById('layout-btn');
   inviteBtn = document.getElementById('invite-btn');
   leaveBtn = document.getElementById('leave-btn');
+  settingsBtn = document.getElementById('settings-btn');
   micIcon = document.getElementById('mic-icon');
   micOffIcon = document.getElementById('mic-off-icon');
   cameraIcon = document.getElementById('camera-icon');
@@ -47,8 +46,15 @@ async function init() {
   statusText = document.getElementById('status-text');
   audioInputSelect = document.getElementById('audio-input');
   videoInputSelect = document.getElementById('video-input');
+  audioOutputSelect = document.getElementById('audio-output');
   toast = document.getElementById('toast');
   toastMessage = document.getElementById('toast-message');
+  settingsPopup = document.getElementById('settings-popup');
+  closeSettingsBtn = document.getElementById('close-settings');
+  mediaDevicesTab = document.getElementById('media-devices-tab');
+  effectsTab = document.getElementById('effects-tab');
+  mediaDevicesContent = document.getElementById('media-devices-content');
+  effectsContent = document.getElementById('effects-content');
   
   try {
     // Verify LiveKit is available
@@ -292,11 +298,6 @@ function setupEventListeners() {
         
         // Reset active screen share ID
         activeScreenShareId = null;
-        
-        // If we're in focus layout, update the grid
-        if (isFocusLayout) {
-          updateParticipantGrid();
-        }
       } else {
         // Start screen sharing
         try {
@@ -352,11 +353,6 @@ function setupEventListeners() {
           screenBtn.classList.add('bg-blue-600');
           showToast('Screen sharing started');
           
-          // Enable the layout button when screen sharing starts
-          layoutBtn.disabled = false;
-          layoutBtn.classList.remove('opacity-50');
-          layoutBtn.classList.remove('disabled');
-          
           // Set this participant as the active screen share
           activeScreenShareId = room.localParticipant.identity;
           
@@ -402,39 +398,6 @@ function setupEventListeners() {
     } catch (error) {
       console.error('Error generating invite link:', error);
       showToast('Error generating invite link');
-    }
-  });
-  
-  // Layout toggle button
-  layoutBtn.addEventListener('click', () => {
-    try {
-      // Only allow layout toggle when there's an active screen share
-      if (!activeScreenShareId && !hasAnyScreenShare()) {
-        showToast('Layout toggle is only available when screen sharing is active');
-        return;
-      }
-      
-      // Toggle focus layout
-      isFocusLayout = !isFocusLayout;
-      
-      // Update button appearance
-      if (isFocusLayout) {
-        layoutBtn.classList.remove('bg-gray-700');
-        layoutBtn.classList.add('bg-blue-600');
-        showToast('Focus layout enabled - Screen share is now full screen');
-        participantsContainer.classList.add('focus-layout');
-      } else {
-        layoutBtn.classList.remove('bg-blue-600');
-        layoutBtn.classList.add('bg-gray-700');
-        showToast('Grid layout enabled');
-        participantsContainer.classList.remove('focus-layout');
-      }
-      
-      // Reorganize the grid
-      updateParticipantGrid();
-    } catch (error) {
-      console.error('Error toggling layout:', error);
-      showToast('Failed to toggle layout');
     }
   });
   
@@ -484,6 +447,57 @@ function setupEventListeners() {
       showToast('Failed to change camera: ' + (error.message || 'Unknown error'));
     }
   });
+  
+  // Settings button
+  settingsBtn.addEventListener('click', () => {
+    settingsPopup.classList.remove('hidden');
+    
+    // Refresh device lists when opening settings
+    refreshInputDevices();
+    refreshAudioOutputDevices();
+  });
+
+  // Close settings button
+  closeSettingsBtn.addEventListener('click', () => {
+    settingsPopup.classList.add('hidden');
+  });
+
+  // Close settings when clicking outside the settings box
+  settingsPopup.addEventListener('click', (event) => {
+    if (event.target === settingsPopup) {
+      settingsPopup.classList.add('hidden');
+    }
+  });
+  
+  // Tab switching
+  mediaDevicesTab.addEventListener('click', () => {
+    // Activate media devices tab
+    mediaDevicesTab.classList.add('border-blue-500');
+    mediaDevicesTab.classList.remove('border-transparent', 'text-gray-400');
+    mediaDevicesContent.classList.remove('hidden');
+    
+    // Deactivate effects tab
+    effectsTab.classList.remove('border-blue-500');
+    effectsTab.classList.add('border-transparent', 'text-gray-400');
+    effectsContent.classList.add('hidden');
+  });
+  
+  effectsTab.addEventListener('click', () => {
+    // Activate effects tab
+    effectsTab.classList.add('border-blue-500');
+    effectsTab.classList.remove('border-transparent', 'text-gray-400');
+    effectsContent.classList.remove('hidden');
+    
+    // Deactivate media devices tab
+    mediaDevicesTab.classList.remove('border-blue-500');
+    mediaDevicesTab.classList.add('border-transparent', 'text-gray-400');
+    mediaDevicesContent.classList.add('hidden');
+  });
+  
+  // Add event listener for audio output device change
+  if (audioOutputSelect) {
+    audioOutputSelect.addEventListener('change', handleAudioOutputChange);
+  }
 }
 
 // Setup room events
@@ -564,17 +578,10 @@ function setupRoomEvents() {
       // Set as active screen share
       activeScreenShareId = participant.identity;
       
-      // Enable the layout button
-      layoutBtn.disabled = false;
-      layoutBtn.classList.remove('opacity-50');
-      layoutBtn.classList.remove('disabled');
-      
-      // If we're already in focus layout, make sure the UI reflects that
-      if (isFocusLayout) {
-        layoutBtn.classList.remove('bg-gray-700');
-        layoutBtn.classList.add('bg-blue-600');
-        participantsContainer.classList.add('focus-layout');
-      }
+      // Force a complete grid update to reorganize tiles
+      setTimeout(() => {
+        updateParticipantGrid();
+      }, 100);
     }
     
     updateParticipantGrid();
@@ -594,22 +601,6 @@ function setupRoomEvents() {
       // If this was the active screen share, reset it
       if (activeScreenShareId === participant.identity) {
         activeScreenShareId = null;
-        
-        // If we're in focus layout but no more screen shares, revert to normal layout
-        if (isFocusLayout && !hasAnyScreenShare()) {
-          isFocusLayout = false;
-          layoutBtn.classList.remove('bg-blue-600');
-          layoutBtn.classList.add('bg-gray-700');
-          participantsContainer.classList.remove('focus-layout');
-          showToast('Returned to grid layout');
-        }
-        
-        // If there are no more screen shares, disable the layout button
-        if (!hasAnyScreenShare()) {
-          layoutBtn.disabled = true;
-          layoutBtn.classList.add('opacity-50');
-          layoutBtn.classList.add('disabled');
-        }
       }
       
       // Remove the screen share tile from the DOM
@@ -920,90 +911,7 @@ async function joinRoom(username, roomName, options = {}) {
         // Always do an initial refresh when a participant joins
         if (room) {
           // Force an initial update when joining the room
-          if (!initialGridUpdateDone) {
-            console.log('Performing initial grid update');
-            updateParticipantGrid();
-            initialGridUpdateDone = true;
-            return;
-          }
-          
-          // Get the actual remote participants from the room
-          let remoteParticipantCount = 0;
-          
-          // Method 1: Check room.participants (standard Map in newer SDK versions)
-          if (room.participants instanceof Map) {
-            remoteParticipantCount = room.participants.size;
-            console.log('Remote participants from Map:', Array.from(room.participants.values()).map(p => p.identity));
-          } 
-          // Method 2: Try alternative ways to count participants
-          else if (room.participants) {
-            try {
-              if (Array.isArray(room.participants)) {
-                remoteParticipantCount = room.participants.length;
-              } else if (typeof room.participants === 'object') {
-                remoteParticipantCount = Object.keys(room.participants).length;
-              }
-              console.log('Remote participants count from object:', remoteParticipantCount);
-            } catch (e) {
-              console.error('Error counting participants:', e);
-            }
-          }
-          
-          // Method 3: Check room.remoteParticipants as fallback
-          if (remoteParticipantCount === 0 && room.remoteParticipants) {
-            try {
-              if (room.remoteParticipants instanceof Map) {
-                remoteParticipantCount = room.remoteParticipants.size;
-              } else if (Array.isArray(room.remoteParticipants)) {
-                remoteParticipantCount = room.remoteParticipants.length;
-              } else if (typeof room.remoteParticipants === 'object') {
-                remoteParticipantCount = Object.keys(room.remoteParticipants).length;
-              }
-              console.log('Remote participants count from remoteParticipants:', remoteParticipantCount);
-            } catch (e) {
-              console.error('Error counting remote participants:', e);
-            }
-          }
-          
-          // Method 4: Last resort, check _state
-          if (remoteParticipantCount === 0 && room._state && room._state.participants) {
-            try {
-              const stateParticipants = Object.values(room._state.participants);
-              // Filter out the local participant
-              const remoteStateParticipants = stateParticipants.filter(p => 
-                p && p.sid && room.localParticipant && p.sid !== room.localParticipant.sid);
-              remoteParticipantCount = remoteStateParticipants.length;
-              console.log('Remote participants count from _state:', remoteParticipantCount);
-            } catch (e) {
-              console.error('Error counting state participants:', e);
-            }
-          }
-          
-          // Count displayed remote participant tiles (excluding screen shares and local participant)
-          const displayedParticipantTiles = Array.from(
-            document.querySelectorAll('#participants-container > div[id^="participant-"]')
-          ).filter(el => !el.id.includes(room.localParticipant.identity));
-          
-          const displayedParticipantCount = displayedParticipantTiles.length;
-          
-          // Count the local participant tile
-          const hasLocalParticipantTile = document.getElementById(`participant-${room.localParticipant.identity}`) !== null;
-          
-          console.log('Participant count check:', {
-            actualRemoteParticipants: remoteParticipantCount,
-            displayedRemoteTiles: displayedParticipantCount,
-            hasLocalTile: hasLocalParticipantTile
-          });
-          
-          // Always refresh if we're missing remote participants
-          if (remoteParticipantCount > displayedParticipantCount || !hasLocalParticipantTile) {
-            console.log('Missing participants, refreshing grid');
-            updateParticipantGrid();
-          } else {
-            console.log('All participants accounted for, updating existing tiles');
-            // Just update existing tiles without full refresh
-            updateExistingParticipantTiles();
-          }
+          updateParticipantGrid();
         }
       }, 3000);
     } catch (connectionError) {
@@ -1098,6 +1006,140 @@ async function populateDeviceOptions() {
   }
 }
 
+// Refresh available audio and video input devices
+function refreshInputDevices() {
+  // Only run if browser has navigator.mediaDevices API
+  if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) {
+    console.log('Browser does not support mediaDevices API');
+    return;
+  }
+  
+  navigator.mediaDevices.enumerateDevices()
+    .then(devices => {
+      // Clear current options
+      while (audioInputSelect.firstChild) {
+        audioInputSelect.removeChild(audioInputSelect.firstChild);
+      }
+      
+      while (videoInputSelect.firstChild) {
+        videoInputSelect.removeChild(videoInputSelect.firstChild);
+      }
+      
+      // Add default option
+      const audioDefaultOption = document.createElement('option');
+      audioDefaultOption.value = 'default';
+      audioDefaultOption.text = 'Default Microphone';
+      audioInputSelect.appendChild(audioDefaultOption);
+      
+      const videoDefaultOption = document.createElement('option');
+      videoDefaultOption.value = 'default';
+      videoDefaultOption.text = 'Default Camera';
+      videoInputSelect.appendChild(videoDefaultOption);
+      
+      // Filter for audio and video input devices
+      const audioInputDevices = devices.filter(device => device.kind === 'audioinput');
+      const videoInputDevices = devices.filter(device => device.kind === 'videoinput');
+      
+      // Populate audio select
+      audioInputDevices.forEach(device => {
+        const option = document.createElement('option');
+        option.value = device.deviceId;
+        option.text = device.label || `Microphone ${audioInputSelect.length + 1}`;
+        audioInputSelect.appendChild(option);
+      });
+      
+      // Populate video select
+      videoInputDevices.forEach(device => {
+        const option = document.createElement('option');
+        option.value = device.deviceId;
+        option.text = device.label || `Camera ${videoInputSelect.length + 1}`;
+        videoInputSelect.appendChild(option);
+      });
+    })
+    .catch(err => {
+      console.error('Error enumerating devices:', err);
+    });
+}
+
+// Refresh available audio output devices (speakers)
+function refreshAudioOutputDevices() {
+  // Only proceed if the browser supports audioOutput selection
+  if (!('sinkId' in HTMLMediaElement.prototype)) {
+    console.log('Browser does not support output device selection');
+    
+    // Clear and add single option
+    while (audioOutputSelect.firstChild) {
+      audioOutputSelect.removeChild(audioOutputSelect.firstChild);
+    }
+    
+    const defaultOption = document.createElement('option');
+    defaultOption.value = 'default';
+    defaultOption.text = 'Default (Browser Controlled)';
+    audioOutputSelect.appendChild(defaultOption);
+    
+    return;
+  }
+  
+  navigator.mediaDevices.enumerateDevices()
+    .then(devices => {
+      // Clear current options
+      while (audioOutputSelect.firstChild) {
+        audioOutputSelect.removeChild(audioOutputSelect.firstChild);
+      }
+      
+      // Add default option
+      const defaultOption = document.createElement('option');
+      defaultOption.value = 'default';
+      defaultOption.text = 'Default Speaker';
+      audioOutputSelect.appendChild(defaultOption);
+      
+      // Filter for audio output devices
+      const audioOutputDevices = devices.filter(device => device.kind === 'audiooutput');
+      
+      // Populate select
+      audioOutputDevices.forEach(device => {
+        const option = document.createElement('option');
+        option.value = device.deviceId;
+        option.text = device.label || `Speaker ${audioOutputSelect.length + 1}`;
+        audioOutputSelect.appendChild(option);
+      });
+    })
+    .catch(err => {
+      console.error('Error enumerating output devices:', err);
+    });
+}
+
+// Handle audio output device change
+function handleAudioOutputChange() {
+  const outputDeviceId = audioOutputSelect.value;
+  
+  if (!room) {
+    console.log('Room not connected yet, audio output will be set when connected');
+    return;
+  }
+  
+  try {
+    // Set sink ID for all audio elements
+    const audioElements = document.querySelectorAll('audio');
+    audioElements.forEach(el => {
+      if (typeof el.sinkId !== 'undefined') {
+        el.setSinkId(outputDeviceId)
+          .then(() => {
+            console.log(`Success, audio output device attached: ${outputDeviceId}`);
+          })
+          .catch(error => {
+            console.error('Error setting audio output:', error);
+          });
+      }
+    });
+    
+    showToast('Speaker changed successfully');
+  } catch (err) {
+    console.error('Error changing audio output:', err);
+    showToast('Failed to change speaker');
+  }
+}
+
 // Update connection status
 function updateConnectionStatus(status) {
   statusText.textContent = status;
@@ -1124,69 +1166,6 @@ function updateParticipantGrid() {
       const participantId = el.id.replace('participant-', '');
       existingTiles[participantId] = el;
     });
-    
-    // Clear the participants container if in focus layout
-    if (isFocusLayout) {
-      // In focus layout, we'll reorganize the tiles
-      // First, check if we need to create a container for participant tiles
-      let participantTilesContainer = participantsContainer.querySelector('.participant-tiles-container');
-      
-      if (!participantTilesContainer) {
-        // Create a container for participant tiles
-        participantTilesContainer = document.createElement('div');
-        participantTilesContainer.className = 'participant-tiles-container';
-        participantTilesContainer.style.display = 'none'; // Hide participant tiles in focus mode
-        participantsContainer.appendChild(participantTilesContainer);
-      }
-      
-      // Move all participant tiles to the container
-      existingElements.forEach(el => {
-        if (!el.id.startsWith('screen-')) {
-          participantTilesContainer.appendChild(el);
-        }
-      });
-      
-      // Keep screen share tiles at the top level and ensure they're visible
-      const screenShareTiles = participantsContainer.querySelectorAll('[id^="screen-"]');
-      screenShareTiles.forEach(el => {
-        // Make sure screen share is at the top level
-        participantsContainer.insertBefore(el, participantTilesContainer);
-        
-        // Ensure it's visible and has the correct styles
-        el.style.position = 'absolute';
-        el.style.top = '0';
-        el.style.left = '0';
-        el.style.width = '100%';
-        el.style.height = '100%';
-        el.style.maxWidth = '100%';
-        el.style.maxHeight = '100vh';
-        el.style.zIndex = '10';
-      });
-    } else {
-      // If switching back from focus layout, move all tiles back to the main container
-      const participantTilesContainer = participantsContainer.querySelector('.participant-tiles-container');
-      if (participantTilesContainer) {
-        // Move all participant tiles back to the main container
-        while (participantTilesContainer.firstChild) {
-          participantsContainer.appendChild(participantTilesContainer.firstChild);
-        }
-        // Remove the participant tiles container
-        participantTilesContainer.remove();
-      }
-      
-      // Reset any inline styles on screen share tiles
-      const screenShareTiles = participantsContainer.querySelectorAll('[id^="screen-"]');
-      screenShareTiles.forEach(el => {
-        el.style.position = '';
-        el.style.top = '';
-        el.style.left = '';
-        el.style.width = '';
-        el.style.height = '';
-        el.style.maxWidth = '';
-        el.style.maxHeight = '';
-        el.style.zIndex = '';
-      });
-    }
     
     // Process the local participant
     if (room.localParticipant) {
@@ -1485,14 +1464,12 @@ function createScreenShareTile(participant, screenPublication) {
   // Create screen container
   const screenContainer = document.createElement('div');
   screenContainer.className = 'absolute inset-0';
-  tile.appendChild(screenContainer);
   
-  // Attach screen share
-  console.log('Attaching screen share track:', screenPublication.trackSid);
+  // Attach screen share track
   const screenElement = screenPublication.track.attach();
-  screenElement.autoplay = true;
   screenElement.className = 'w-full h-full object-contain';
   screenContainer.appendChild(screenElement);
+  tile.appendChild(screenContainer);
   
   // Create info bar
   const infoBar = document.createElement('div');
@@ -1503,29 +1480,6 @@ function createScreenShareTile(participant, screenPublication) {
   label.className = 'text-white text-sm';
   label.textContent = `${participant.identity}'s Screen`;
   infoBar.appendChild(label);
-  
-  // Add focus button if not already in focus mode
-  if (!isFocusLayout) {
-    const focusButton = document.createElement('button');
-    focusButton.className = 'text-white text-xs bg-blue-600 hover:bg-blue-700 rounded px-2 py-1';
-    focusButton.textContent = 'Full Screen';
-    focusButton.addEventListener('click', () => {
-      // Set active screen share ID
-      activeScreenShareId = participant.identity;
-      
-      // Enable focus layout
-      isFocusLayout = true;
-      participantsContainer.classList.add('focus-layout');
-      layoutBtn.classList.remove('bg-gray-700');
-      layoutBtn.classList.add('bg-blue-600');
-      
-      // Update the grid
-      updateParticipantGrid();
-      
-      showToast('Focus layout enabled - Screen share is now full screen');
-    });
-    infoBar.appendChild(focusButton);
-  }
   
   tile.appendChild(infoBar);
   participantsContainer.appendChild(tile);
@@ -1773,14 +1727,44 @@ function updateExistingParticipantTiles() {
 
 // Check if any participant is sharing their screen
 function hasAnyScreenShare() {
-  if (!room || !room.participants) return false;
+  if (!room) return false;
   
-  for (const participant of room.participants.values()) {
-    const screenPublication = participant.getTrackPublication(LivekitClient.Track.Source.ScreenShare);
-    if (screenPublication && screenPublication.track && !screenPublication.isMuted) {
-      return true;
+  try {
+    // Check local participant
+    if (room.localParticipant) {
+      const localScreenShare = room.localParticipant.getTrackPublication(LivekitClient.Track.Source.ScreenShare);
+      if (localScreenShare && localScreenShare.track && !localScreenShare.isMuted) {
+        return true;
+      }
     }
+    
+    // Check remote participants
+    let remoteParticipants = [];
+    
+    if (room.participants instanceof Map) {
+      remoteParticipants = Array.from(room.participants.values());
+    } else if (room.participants) {
+      try {
+        if (Array.isArray(room.participants)) {
+          remoteParticipants = room.participants;
+        } else if (typeof room.participants === 'object') {
+          remoteParticipants = Object.values(room.participants);
+        }
+      } catch (e) {
+        console.error('Error checking participants for screen share:', e);
+      }
+    }
+    
+    for (const participant of remoteParticipants) {
+      const screenPublication = participant.getTrackPublication(LivekitClient.Track.Source.ScreenShare);
+      if (screenPublication && screenPublication.track && !screenPublication.isMuted) {
+        return true;
+      }
+    }
+    
+    return false;
+  } catch (error) {
+    console.error('Error checking for screen shares:', error);
+    return false;
   }
-  
-  return false;
 }
