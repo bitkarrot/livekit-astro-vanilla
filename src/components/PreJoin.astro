@@ -455,5 +455,24 @@ const { roomName } = Astro.props;
         console.error('Error starting media preview:', error);
       }
     }
+    
+    // Add event listener for join button to ensure values are passed
+    const joinBtn = document.getElementById('join-btn');
+    if (joinBtn) {
+      joinBtn.addEventListener('click', () => {
+        // Update the window properties right before joining to ensure latest values
+        window.selectedAudioDevice = selectedAudioDevice;
+        window.selectedVideoDevice = selectedVideoDevice;
+        window.audioEnabled = audioEnabled;
+        window.videoEnabled = videoEnabled;
+        
+        console.log('PreJoin settings before joining:', {
+          audioEnabled,
+          videoEnabled,
+          selectedAudioDevice,
+          selectedVideoDevice
+        });
+      });
+    }
   });
 </script>
