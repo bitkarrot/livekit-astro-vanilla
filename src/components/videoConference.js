@@ -1679,14 +1679,13 @@ function updateMicButton() {
   if (micEnabled) {
     micIcon.classList.remove('hidden');
     micOffIcon.classList.add('hidden');
-    micBtn.classList.remove('bg-red-600');
-    micBtn.classList.add('bg-gray-700');
   } else {
     micIcon.classList.add('hidden');
     micOffIcon.classList.remove('hidden');
-    micBtn.classList.remove('bg-gray-700');
-    micBtn.classList.add('bg-red-600');
   }
+  // Keep the background color gray regardless of state
+  micBtn.classList.remove('bg-red-600');
+  micBtn.classList.add('bg-gray-700');
 }
 
 // Update camera button UI
@@ -1694,14 +1693,13 @@ function updateCameraButton() {
   if (cameraEnabled) {
     cameraIcon.classList.remove('hidden');
     cameraOffIcon.classList.add('hidden');
-    cameraBtn.classList.remove('bg-red-600');
-    cameraBtn.classList.add('bg-gray-700');
   } else {
     cameraIcon.classList.add('hidden');
     cameraOffIcon.classList.remove('hidden');
-    cameraBtn.classList.remove('bg-gray-700');
-    cameraBtn.classList.add('bg-red-600');
   }
+  // Keep the background color gray regardless of state
+  cameraBtn.classList.remove('bg-red-600');
+  cameraBtn.classList.add('bg-gray-700');
 }
 
 // Update connection quality indicator
