@@ -1,0 +1,459 @@
+---
+// PreJoin component for the connect modal
+const { roomName } = Astro.props;
+---
+
+<style>
+  .video-preview {
+    aspect-ratio: 16/9;
+    width: 100%;
+    max-width: 640px;
+    background-color: #111;
+    border-radius: 8px;
+    overflow: hidden;
+    margin-bottom: 1rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  
+  .video-preview svg {
+    width: 120px;
+    height: 120px;
+    color: #444;
+  }
+  
+  .device-control {
+    position: relative;
+    margin-bottom: 1rem;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+  
+  .device-button-group {
+    display: flex;
+    width: 100%;
+    border-radius: 4px;
+    overflow: hidden;
+  }
+  
+  .device-toggle {
+    flex-grow: 1;
+    display: flex;
+    align-items: center;
+    padding: 0.5rem 1rem;
+    background-color: #222;
+    color: white;
+    cursor: pointer;
+    border: none;
+    border-right: 1px solid #333;
+    font-size: 0.9rem;
+  }
+  
+  .device-toggle.disabled {
+    background-color: #444;
+  }
+  
+  .device-toggle.disabled svg {
+    color: #888;
+  }
+  
+  .device-dropdown-button {
+    width: 36px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background-color: #222;
+    color: white;
+    cursor: pointer;
+    border: none;
+  }
+  
+  .device-dropdown {
+    position: absolute;
+    bottom: 100%;
+    left: 0;
+    right: 0;
+    padding: 0.25rem 0.25rem;
+    background-color: #333;
+    color: white;
+    border-radius: 4px;
+    margin-bottom: 0.25rem;
+    z-index: 10;
+    max-height: 200px;
+    overflow-y: auto;
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
+  }
+  
+  .device-dropdown button {
+    display: block;
+    width: 100%;
+    padding: 1rem 1.25rem;
+    text-align: left;
+    background-color: #333;
+    border: none;
+    color: white !important;
+    cursor: pointer;
+    font-size: 0.9rem;
+    border-bottom: 1px solid #444;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+  
+  .device-dropdown button:last-child {
+    background-color: #333;
+    color: white !important;
+    border-bottom: none;
+  }
+  
+  .device-dropdown button:hover {
+    color: white !important;
+    background-color: #333;
+  }
+  
+  .device-dropdown button.active {
+    background-color: #2563eb !important;
+    color: #2563eb !important;
+    font-weight: 500;
+  }
+  
+  .hidden {
+    display: none;
+  }
+  
+  .icon-container {
+    position: relative;
+    display: inline-flex;
+    margin-right: 0.5rem;
+  }
+  
+  .slash-icon {
+    position: absolute;
+    top: 0;
+    left: 0;
+    color: #ff4444;
+    display: none;
+  }
+  
+  .disabled .slash-icon {
+    display: block;
+  }
+</style>
+
+<div id="connect-modal" class="fixed inset-0 bg-gray-900 bg-opacity-90 flex items-center justify-center">
+  <div class="bg-gray-800 p-6 rounded-lg max-w-md w-full">
+    <h2 class="text-white text-xl font-bold mb-4">Join Meeting</h2>
+    <div id="permissions-warning" class="hidden mb-4 p-3 bg-yellow-600 text-white rounded">
+      Please allow camera and microphone access to join the meeting
+    </div>
+    
+    <!-- Video preview -->
+    <div class="video-preview" id="video-preview">
+      <!-- Video element will be inserted here by JS -->
+      <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5.121 17.804A13.937 13.937 0 0112 16c2.5 0 4.847.655 6.879 1.804M15 10a3 3 0 11-6 0 3 3 0 016 0zm6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+      </svg>
+    </div>
+    
+    <!-- Device selection -->
+    <div class="flex gap-2 mb-4">
+      <div class="device-control flex-1">
+        <div class="device-button-group">
+          <button id="microphone-toggle" class="device-toggle">
+            <div class="icon-container">
+              <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z"></path>
+              </svg>
+              <svg class="w-5 h-5 slash-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18 6L6 18"></path>
+              </svg>
+            </div>
+            <span>Microphone</span>
+          </button>
+          <button id="microphone-dropdown-button" class="device-dropdown-button">
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 15l7-7 7 7"></path>
+            </svg>
+          </button>
+        </div>
+        <div id="microphone-dropdown" class="device-dropdown hidden">
+          <!-- Microphone options will be inserted here by JS -->
+        </div>
+      </div>
+      
+      <div class="device-control flex-1">
+        <div class="device-button-group">
+          <button id="camera-toggle" class="device-toggle">
+            <div class="icon-container">
+              <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"></path>
+              </svg>
+              <svg class="w-5 h-5 slash-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18 6L6 18"></path>
+              </svg>
+            </div>
+            <span>Camera</span>
+          </button>
+          <button id="camera-dropdown-button" class="device-dropdown-button">
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 15l7-7 7 7"></path>
+            </svg>
+          </button>
+        </div>
+        <div id="camera-dropdown" class="device-dropdown hidden">
+          <!-- Camera options will be inserted here by JS -->
+        </div>
+      </div>
+    </div>
+    
+    <div class="mb-4">
+      <label class="block text-gray-300 mb-2" for="username">Your Name</label>
+      <input id="username" type="text" class="w-full p-2 rounded bg-gray-700 text-white" placeholder="Enter your name">
+    </div>
+    
+    <!-- Hidden room input for compatibility with existing JS -->
+    <input id="room" type="hidden" class="hidden" value={roomName}>
+    
+    <button id="join-btn" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded">
+      Join Room
+    </button>
+  </div>
+</div>
+
+<script>
+  // This script handles the PreJoin component UI
+  document.addEventListener('DOMContentLoaded', () => {
+    // Elements
+    const videoPreview = document.getElementById('video-preview');
+    const microphoneToggle = document.getElementById('microphone-toggle');
+    const microphoneDropdownBtn = document.getElementById('microphone-dropdown-button');
+    const microphoneDropdown = document.getElementById('microphone-dropdown');
+    const cameraToggle = document.getElementById('camera-toggle');
+    const cameraDropdownBtn = document.getElementById('camera-dropdown-button');
+    const cameraDropdown = document.getElementById('camera-dropdown');
+    
+    // State
+    let localStream = null;
+    let videoEnabled = true;
+    let audioEnabled = true;
+    let selectedAudioDevice = null;
+    let selectedVideoDevice = null;
+    
+    // Initialize preview
+    initializeDevicePreview();
+    
+    // Toggle microphone
+    microphoneToggle.addEventListener('click', () => {
+      audioEnabled = !audioEnabled;
+      updateMicrophoneState();
+      if (localStream) {
+        localStream.getAudioTracks().forEach(track => {
+          track.enabled = audioEnabled;
+        });
+      }
+    });
+    
+    // Toggle camera
+    cameraToggle.addEventListener('click', () => {
+      videoEnabled = !videoEnabled;
+      updateCameraState();
+      if (localStream) {
+        localStream.getVideoTracks().forEach(track => {
+          track.enabled = videoEnabled;
+        });
+      }
+    });
+    
+    // Toggle dropdowns
+    microphoneDropdownBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      microphoneDropdown.classList.toggle('hidden');
+      if (!cameraDropdown.classList.contains('hidden')) {
+        cameraDropdown.classList.add('hidden');
+      }
+    });
+    
+    cameraDropdownBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      cameraDropdown.classList.toggle('hidden');
+      if (!microphoneDropdown.classList.contains('hidden')) {
+        microphoneDropdown.classList.add('hidden');
+      }
+    });
+    
+    // Close dropdowns when clicking outside
+    document.addEventListener('click', (e) => {
+      if (!e.target.closest('.device-control')) {
+        microphoneDropdown.classList.add('hidden');
+        cameraDropdown.classList.add('hidden');
+      }
+    });
+    
+    // Update UI to reflect state
+    function updateMicrophoneState() {
+      if (audioEnabled) {
+        microphoneToggle.classList.remove('disabled');
+      } else {
+        microphoneToggle.classList.add('disabled');
+      }
+    }
+    
+    function updateCameraState() {
+      if (videoEnabled) {
+        cameraToggle.classList.remove('disabled');
+      } else {
+        cameraToggle.classList.add('disabled');
+      }
+    }
+    
+    // Initialize device preview
+    async function initializeDevicePreview() {
+      try {
+        // Request permissions and get devices
+        await navigator.mediaDevices.getUserMedia({ audio: true, video: true });
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        
+        // Populate device dropdowns
+        populateDeviceDropdowns(devices);
+        
+        // Start preview with default devices
+        startMediaPreview();
+      } catch (error) {
+        console.error('Error initializing device preview:', error);
+        const permissionsWarning = document.getElementById('permissions-warning');
+        if (permissionsWarning) {
+          permissionsWarning.classList.remove('hidden');
+        }
+      }
+    }
+    
+    // Populate device dropdowns
+    function populateDeviceDropdowns(devices) {
+      const audioInputs = devices.filter(device => device.kind === 'audioinput');
+      const videoInputs = devices.filter(device => device.kind === 'videoinput');
+      
+      // Populate audio dropdown
+      microphoneDropdown.innerHTML = '';
+      audioInputs.forEach(device => {
+        const button = document.createElement('button');
+        button.textContent = device.label || `Microphone ${audioInputs.indexOf(device) + 1}`;
+        button.dataset.deviceId = device.deviceId;
+        button.addEventListener('click', () => {
+          selectedAudioDevice = device.deviceId;
+          startMediaPreview();
+          microphoneDropdown.classList.add('hidden');
+          
+          // Update active state
+          microphoneDropdown.querySelectorAll('button').forEach(btn => {
+            btn.classList.remove('active');
+          });
+          button.classList.add('active');
+        });
+        
+        // Mark as active if it's the current device
+        if (device.deviceId === selectedAudioDevice) {
+          button.classList.add('active');
+        }
+        
+        microphoneDropdown.appendChild(button);
+      });
+      
+      // Populate video dropdown
+      cameraDropdown.innerHTML = '';
+      videoInputs.forEach(device => {
+        const button = document.createElement('button');
+        button.textContent = device.label || `Camera ${videoInputs.indexOf(device) + 1}`;
+        button.dataset.deviceId = device.deviceId;
+        button.addEventListener('click', () => {
+          selectedVideoDevice = device.deviceId;
+          startMediaPreview();
+          cameraDropdown.classList.add('hidden');
+          
+          // Update active state
+          cameraDropdown.querySelectorAll('button').forEach(btn => {
+            btn.classList.remove('active');
+          });
+          button.classList.add('active');
+        });
+        
+        // Mark as active if it's the current device
+        if (device.deviceId === selectedVideoDevice) {
+          button.classList.add('active');
+        }
+        
+        cameraDropdown.appendChild(button);
+      });
+      
+      // Set initial active device if none is selected
+      if (!selectedAudioDevice && audioInputs.length > 0) {
+        selectedAudioDevice = audioInputs[0].deviceId;
+        const firstAudioButton = microphoneDropdown.querySelector('button');
+        if (firstAudioButton) firstAudioButton.classList.add('active');
+      }
+      
+      if (!selectedVideoDevice && videoInputs.length > 0) {
+        selectedVideoDevice = videoInputs[0].deviceId;
+        const firstVideoButton = cameraDropdown.querySelector('button');
+        if (firstVideoButton) firstVideoButton.classList.add('active');
+      }
+    }
+    
+    // Start media preview
+    async function startMediaPreview() {
+      try {
+        // Stop any existing stream
+        if (localStream) {
+          localStream.getTracks().forEach(track => track.stop());
+        }
+        
+        // Create constraints
+        const constraints = {
+          audio: selectedAudioDevice ? { deviceId: { exact: selectedAudioDevice } } : true,
+          video: selectedVideoDevice ? { deviceId: { exact: selectedVideoDevice } } : true
+        };
+        
+        // Get new stream
+        localStream = await navigator.mediaDevices.getUserMedia(constraints);
+        
+        // Apply enabled/disabled state
+        localStream.getAudioTracks().forEach(track => {
+          track.enabled = audioEnabled;
+        });
+        
+        localStream.getVideoTracks().forEach(track => {
+          track.enabled = videoEnabled;
+        });
+        
+        // Create video element if it doesn't exist
+        let videoElement = videoPreview.querySelector('video');
+        if (!videoElement) {
+          videoElement = document.createElement('video');
+          videoElement.autoplay = true;
+          videoElement.muted = true;
+          videoElement.playsInline = true;
+          videoElement.style.width = '100%';
+          videoElement.style.height = '100%';
+          videoElement.style.objectFit = 'cover';
+          
+          // Remove placeholder SVG and add video
+          videoPreview.innerHTML = '';
+          videoPreview.appendChild(videoElement);
+        }
+        
+        // Set stream as source
+        videoElement.srcObject = localStream;
+        
+        // Update UI to reflect state
+        updateMicrophoneState();
+        updateCameraState();
+        
+        // Store selected devices in window for the main videoConference.js to use
+        window.selectedAudioDevice = selectedAudioDevice;
+        window.selectedVideoDevice = selectedVideoDevice;
+        window.audioEnabled = audioEnabled;
+        window.videoEnabled = videoEnabled;
+        
+      } catch (error) {
+        console.error('Error starting media preview:', error);
+      }
+    }
+  });
+</script>

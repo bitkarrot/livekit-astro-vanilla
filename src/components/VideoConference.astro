@@ -1,6 +1,7 @@
 ---
 const { roomName } = Astro.props;
 import '../styles/videoConference.css';
+import PreJoin from './PreJoin.astro';
 ---
 
 <!-- Connection status banner -->
@@ -70,26 +71,8 @@ import '../styles/videoConference.css';
   </button>
 </div>
 
-<!-- Connect modal -->
-<div id="connect-modal" class="fixed inset-0 bg-gray-900 bg-opacity-75 flex items-center justify-center">
-  <div class="bg-gray-800 p-6 rounded-lg max-w-md w-full">
-    <h2 class="text-white text-xl font-bold mb-4">Join Meeting</h2>
-    <div id="permissions-warning" class="hidden mb-4 p-3 bg-yellow-600 text-white rounded">
-      Please allow camera and microphone access to join the meeting
-    </div>
-    <div class="mb-4">
-      <label class="block text-gray-300 mb-2" for="username">Your Name</label>
-      <input id="username" type="text" class="w-full p-2 rounded bg-gray-700 text-white" placeholder="Enter your name">
-    </div>
-    <div class="mb-4">
-      <label class="block text-gray-300 mb-2" for="room">Room Name</label>
-      <input id="room" type="text" class="w-full p-2 rounded bg-gray-700 text-white" placeholder="Enter room name">
-    </div>
-    <button id="join-btn" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded">
-      Join
-    </button>
-  </div>
-</div>
+<!-- PreJoin component (connect modal) -->
+<PreJoin roomName={roomName} />
 
 <!-- Toast notifications -->
 <div id="toast" class="fixed top-14 right-2 hidden">

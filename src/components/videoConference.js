@@ -85,19 +85,16 @@ async function init() {
     
     // Check for room name from path-based routing
     const roomNameFromPath = window.roomNameFromPath;
-
+    
     if (roomNameFromPath) {
       console.log('Room name from path:', roomNameFromPath);
       roomInput.value = roomNameFromPath;
       
-      // Auto-connect if room is specified in URL path
+      // Fill in username if available, but don't auto-join
       const username = localStorage.getItem('livekit-username') || '';
       if (username) {
         usernameInput.value = username;
-        // Auto-join after a short delay to allow UI to initialize
-        setTimeout(() => {
-          joinBtn.click();
-        }, 500);
+        // No auto-join - wait for user to click the join button
       }
     } else {
       // Fallback to query parameters for backward compatibility
@@ -105,15 +102,12 @@ async function init() {
       const roomParam = urlParams.get('room');
       if (roomParam) {
         roomInput.value = roomParam;
-
-        // Auto-connect if room is specified in URL
+        
+        // Fill in username if available, but don't auto-join
         const username = localStorage.getItem('livekit-username') || '';
         if (username) {
           usernameInput.value = username;
-          // Auto-join after a short delay to allow UI to initialize
-          setTimeout(() => {
-            joinBtn.click();
-          }, 500);
+          // No auto-join - wait for user to click the join button
         }
       }
     }
@@ -143,10 +137,15 @@ function setupEventListeners() {
   // Join button
   joinBtn.addEventListener('click', async () => {
     const username = usernameInput.value.trim();
-    const roomName = roomInput.value.trim();
+    const roomName = roomInput.value.trim() || window.roomNameFromPath;
     
-    if (!username || !roomName) {
-      showToast('Please enter your name and room name');
+    if (!username) {
+      showToast('Please enter your name');
+      return;
+    }
+    
+    if (!roomName) {
+      showToast('Room name is missing');
       return;
     }
     
@@ -154,11 +153,26 @@ function setupEventListeners() {
     localStorage.setItem('livekit-username', username);
     
     try {
-      await joinRoom(username, roomName);
+      // Get device preferences from PreJoin component
+      const initialAudioEnabled = window.audioEnabled !== undefined ? window.audioEnabled : true;
+      const initialVideoEnabled = window.videoEnabled !== undefined ? window.videoEnabled : true;
+      const selectedAudioDevice = window.selectedAudioDevice;
+      const selectedVideoDevice = window.selectedVideoDevice;
+      
+      // Set initial state based on PreJoin selections
+      micEnabled = initialAudioEnabled;
+      cameraEnabled = initialVideoEnabled;
+      
+      await joinRoom(username, roomName, {
+        audioDeviceId: selectedAudioDevice,
+        videoDeviceId: selectedVideoDevice,
+        audioEnabled: initialAudioEnabled,
+        videoEnabled: initialVideoEnabled
+      });
       
       // Check if we're already using path-based routing
       const isPathBasedRouting = window.roomNameFromPath !== undefined;
-
+      
       if (!isPathBasedRouting) {
         // Redirect to the path-based URL
         window.location.href = `/room/${encodeURIComponent(roomName)}`;
@@ -710,7 +724,7 @@ function cleanupRoom() {
 }
 
 // Join a room
-async function joinRoom(username, roomName) {
+async function joinRoom(username, roomName, options = {}) {
   try {
     // Show connecting status
     updateConnectionStatus('Connecting...');
@@ -847,9 +861,33 @@ async function joinRoom(username, roomName) {
       
       // Enable local tracks with proper error handling
       try {
-        await room.localParticipant.enableCameraAndMicrophone();
-        micEnabled = true;
-        cameraEnabled = true;
+        // Use the device options from PreJoin if available
+        const connectOptions = {
+          audioDeviceId: options.audioDeviceId,
+          videoDeviceId: options.videoDeviceId
+        };
+        
+        if (options.audioEnabled && options.videoEnabled) {
+          await room.localParticipant.enableCameraAndMicrophone(connectOptions);
+          micEnabled = true;
+          cameraEnabled = true;
+        } else {
+          // Handle each track separately based on user preferences
+          if (options.videoEnabled) {
+            await room.localParticipant.setCameraEnabled(true, connectOptions);
+            cameraEnabled = true;
+          } else {
+            cameraEnabled = false;
+          }
+          
+          if (options.audioEnabled) {
+            await room.localParticipant.setMicrophoneEnabled(true, connectOptions);
+            micEnabled = true;
+          } else {
+            micEnabled = false;
+          }
+        }
+        
         updateMicButton();
         updateCameraButton();
       } catch (mediaError) {
