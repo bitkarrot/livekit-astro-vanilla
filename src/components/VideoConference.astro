@@ -148,5 +148,9 @@ import PreJoin from './PreJoin.astro';
 <script define:vars={{ roomName }}>
   // Pass the roomName to the JavaScript
   window.roomNameFromPath = roomName;
+  
+  // Update page title with room name
+  document.title = `Meeting: ${roomName}`;
 </script>
+<script src="./PreJoin.js"></script>
 <script src="./videoConference.js"></script>

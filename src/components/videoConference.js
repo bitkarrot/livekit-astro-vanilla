@@ -89,10 +89,55 @@ async function init() {
     // Setup event listeners
     setupEventListeners();
     
-    // Check for room name from path-based routing
+    // Check for direct join parameters in URL
+    const urlParams = new URLSearchParams(window.location.search);
+    const usernameParam = urlParams.get('username');
     const roomNameFromPath = window.roomNameFromPath;
     
-    if (roomNameFromPath) {
+    if (usernameParam && roomNameFromPath) {
+      console.log('Direct join requested with username:', usernameParam);
+      
+      // Store username for future use
+      localStorage.setItem('livekit-username', usernameParam);
+      
+      // Hide the connect modal immediately
+      if (connectModal) {
+        connectModal.style.display = 'none';
+      }
+      
+      // Join directly with settings from localStorage or defaults
+      try {
+        // Get device preferences from localStorage
+        const initialAudioEnabled = localStorage.getItem('livekit-audio-enabled') === 'false' ? false : true;
+        const initialVideoEnabled = localStorage.getItem('livekit-video-enabled') === 'false' ? false : true;
+        const selectedAudioDevice = localStorage.getItem('livekit-audio-device') || null;
+        const selectedVideoDevice = localStorage.getItem('livekit-video-device') || null;
+        
+        // Set initial state based on localStorage preferences
+        micEnabled = initialAudioEnabled;
+        cameraEnabled = initialVideoEnabled;
+        
+        await joinRoom(usernameParam, roomNameFromPath, {
+          audioDeviceId: selectedAudioDevice,
+          videoDeviceId: selectedVideoDevice,
+          audioEnabled: initialAudioEnabled,
+          videoEnabled: initialVideoEnabled
+        });
+      } catch (error) {
+        console.error('[ERROR] Error connecting to room directly:', error);
+        showToast('Failed to connect: ' + (error.message || 'Unknown error'));
+        
+        // Show the connect modal if direct join fails
+        if (connectModal) {
+          connectModal.style.display = 'flex';
+        }
+        
+        // Pre-fill the username field
+        if (usernameInput) {
+          usernameInput.value = usernameParam;
+        }
+      }
+    } else if (roomNameFromPath) {
       console.log('Room name from path:', roomNameFromPath);
       roomInput.value = roomNameFromPath;
       
@@ -104,7 +149,6 @@ async function init() {
       }
     } else {
       // Fallback to query parameters for backward compatibility
-      const urlParams = new URLSearchParams(window.location.search);
       const roomParam = urlParams.get('room');
       if (roomParam) {
         roomInput.value = roomParam;
