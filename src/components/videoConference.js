@@ -4,7 +4,7 @@ let isReconnecting = false;
 
 // DOM elements - wait for DOM to be fully loaded before accessing
 let connectModal, permissionsWarning, joinBtn, usernameInput, roomInput;
-let participantsContainer, micBtn, cameraBtn, screenBtn, inviteBtn, leaveBtn, settingsBtn;
+let videoGrid, micBtn, cameraBtn, screenBtn, inviteBtn, leaveBtn, settingsBtn;
 let micIcon, micOffIcon, cameraIcon, cameraOffIcon, statusBanner, statusText;
 let audioInputSelect, videoInputSelect, audioOutputSelect, toast, toastMessage;
 let settingsPopup, closeSettingsBtn, mediaDevicesTab, effectsTab, mediaDevicesContent, effectsContent;
@@ -31,7 +31,7 @@ async function init() {
   joinBtn = document.getElementById('join-btn');
   usernameInput = document.getElementById('username');
   roomInput = document.getElementById('room');
-  participantsContainer = document.getElementById('participants-container');
+  videoGrid = document.getElementById('videoGrid');
   micBtn = document.getElementById('mic-btn');
   cameraBtn = document.getElementById('camera-btn');
   screenBtn = document.getElementById('screen-btn');
@@ -452,7 +452,7 @@ function setupEventListeners() {
       await room.disconnect();
       connectModal.classList.remove('hidden');
       statusBanner.classList.add('hidden');
-      participantsContainer.innerHTML = '';
+      videoGrid.innerHTML = '';
     }
   });
   
@@ -729,7 +729,7 @@ function setupRoomEvents() {
     if (!isReconnecting) {
       connectModal.classList.remove('hidden');
       statusBanner.classList.add('hidden');
-      participantsContainer.innerHTML = '';
+      videoGrid.innerHTML = '';
       cleanupRoom();
     }
   });
@@ -1206,7 +1206,7 @@ function updateParticipantGrid() {
     const existingTiles = {};
     
     // First, gather all existing participant tiles
-    const existingElements = participantsContainer.querySelectorAll('[id^="participant-"]');
+    const existingElements = videoGrid.querySelectorAll('[id^="participant-"]');
     existingElements.forEach(el => {
       const participantId = el.id.replace('participant-', '');
       existingTiles[participantId] = el;
@@ -1427,14 +1427,14 @@ function createParticipantTile(participant, isLocal) {
   const qualityIndicator = document.createElement('div');
   qualityIndicator.className = 'text-white text-xs';
   qualityIndicator.id = `connection-quality-${participant.identity}`;
-  qualityIndicator.innerHTML = `<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path>
+  qualityIndicator.innerHTML = `<svg class="w-4 h-4" fill="currentColor" stroke="currentColor" viewBox="0 0 24 24">
+    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 14v4M12 10v8M16 6v12"></path>
   </svg>`;
   indicators.appendChild(qualityIndicator);
   
   infoBar.appendChild(indicators);
   tile.appendChild(infoBar);
-  participantsContainer.appendChild(tile);
+  videoGrid.appendChild(tile);
   
   // Attach video track if available
   const videoPublication = participant.getTrackPublication(LivekitClient.Track.Source.Camera);
@@ -1527,7 +1527,7 @@ function createScreenShareTile(participant, screenPublication) {
   infoBar.appendChild(label);
   
   tile.appendChild(infoBar);
-  participantsContainer.appendChild(tile);
+  videoGrid.appendChild(tile);
   
   // Track this screen share as the active one
   activeScreenShareId = participant.identity;
@@ -1569,7 +1569,7 @@ function createDirectScreenShareTile(participant, track) {
   infoBar.appendChild(label);
   
   tile.appendChild(infoBar);
-  participantsContainer.appendChild(tile);
+  videoGrid.appendChild(tile);
   
   console.log('Direct screen share tile created and added to grid');
 }
@@ -1659,7 +1659,7 @@ function visualizeAudio(participant) {
 // Highlight active speakers
 function highlightActiveSpeakers(speakers) {
   // Reset all participant tiles
-  const allTiles = participantsContainer.querySelectorAll('[id^="participant-"]');
+  const allTiles = videoGrid.querySelectorAll('[id^="participant-"]');
   allTiles.forEach(tile => {
     tile.classList.remove('border-2', 'border-blue-500');
   });

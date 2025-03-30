@@ -1,12 +1,5 @@
-#participants-container {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
-  grid-gap: 1rem;
-  padding: 1rem;
-  overflow: auto;
-}
-
-#participants-container > div {
+/* Styling for video tiles within the grid */
+#videoGrid > div {
   aspect-ratio: 16/9;
   width: 100%;
   max-width: 640px;
@@ -15,64 +8,125 @@
   min-height: 0;
 }
 
-/* For screens less than 667px wide */
-@media (max-width: 667px) {
-  #participants-container {
-    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
-    grid-gap: 0.5rem;
-    padding: 0.5rem;
-  }
-  
-  #participants-container > div {
-    max-width: 200px;
-    max-height: 112.5px; /* Maintains 16:9 ratio (200px ÷ 16 × 9 = 112.5px) */
-  }
-}
-
-/* For very small screens, reduce padding further */
-@media (max-width: 400px) {
-  #participants-container {
-    padding: 0.25rem;
-    grid-gap: 0.25rem;
-  }
-}
-
-/* Focus layout styles */
-#participants-container.focus-layout {
-  grid-template-columns: 1fr;
-  grid-template-rows: 1fr;
-  height: 100%;
+/* Participant box styles */
+.participant-box {
+  border: 2px solid #4B5563;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.1);
+  transition: all 0.2s ease-in-out;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
   position: relative;
 }
 
-#participants-container.focus-layout > div[id^="screen-"] {
-  grid-row: 1;
-  max-width: 100%;
-  max-height: 100vh;
+.participant-box:hover {
+  border-color: #60A5FA;
+}
+
+/* Custom styles for mobile view */
+@media (max-width: 600px) {
+  .mobile-grid {
+    grid-template-columns: 1fr !important;
+  }
+  
+  .mobile-tile {
+    height: 160px !important;
+  }
+}
+
+/* Avatar generator styles */
+.avatar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  font-weight: bold;
+  color: white;
+  width: 80px;
+  height: 80px;
+}
+
+/* Center avatar container */
+.avatar-container {
+  display: flex;
+  justify-content: center;
+  align-items: center;
   width: 100%;
   height: 100%;
-  margin: 0;
+}
+
+/* Full container stretch for 1-2 participants */
+.stretch-container {
+  height: 100%;
+}
+
+/* Expand button styles */
+.expand-button {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  background: rgba(0, 0, 0, 0.5);
+  border-radius: 4px;
+  width: 30px;
+  height: 30px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  z-index: 10;
+}
+
+.expand-button:hover {
+  background: rgba(0, 0, 0, 0.7);
+}
+
+/* Expanded view styles */
+.expanded-view {
   position: absolute;
   top: 0;
   left: 0;
-  z-index: 10;
+  width: 100%;
+  height: 100%;
+  z-index: 100;
+  display: flex;
 }
 
-/* Hide all participant tiles in focus layout */
-#participants-container.focus-layout .participant-tiles-container {
+/* Sidebar styles */
+.sidebar {
+  width: 180px;
+  height: 100%;
+  overflow-y: auto;
+  overflow-x: hidden;
+  background-color: #1F2937;
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.sidebar-tile {
+  width: 100%;
+  height: 100px;
+  flex-shrink: 0;
+  margin-bottom: 4px;
+}
+
+.main-content {
+  flex: 1;
+  padding: 8px;
+  background-color: #111827;
+}
+
+/* Hide scrollbar for Chrome, Safari and Opera */
+.sidebar::-webkit-scrollbar {
   display: none;
 }
 
-/* Show toggle button to view participants */
-#participants-container.focus-layout .toggle-participants-btn {
-  position: absolute;
-  bottom: 20px;
-  right: 20px;
-  z-index: 10;
-  background: rgba(0, 0, 0, 0.5);
-  color: white;
-  border: none;
-  border-radius: 4px;
-  padding: 8px 12px;
-  cursor: pointer;
+/* Hide scrollbar for IE, Edge and Firefox */
+.sidebar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
 }
