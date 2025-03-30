@@ -142,6 +142,7 @@ function removeDebugElements() {
 function setupEventListeners() {
   // Join button
   joinBtn.addEventListener('click', async () => {
+    // get values from prejoin
     const username = usernameInput.value.trim();
     const roomName = roomInput.value.trim() || window.roomNameFromPath;
     
@@ -159,13 +160,13 @@ function setupEventListeners() {
     localStorage.setItem('livekit-username', username);
     
     try {
-      // Get device preferences from PreJoin component
-      const initialAudioEnabled = window.audioEnabled !== undefined ? window.audioEnabled : true;
-      const initialVideoEnabled = window.videoEnabled !== undefined ? window.videoEnabled : true;
-      const selectedAudioDevice = window.selectedAudioDevice;
-      const selectedVideoDevice = window.selectedVideoDevice;
+      // Get device preferences from localStorage
+      const initialAudioEnabled = localStorage.getItem('livekit-audio-enabled') === 'false' ? false : true;
+      const initialVideoEnabled = localStorage.getItem('livekit-video-enabled') === 'false' ? false : true;
+      const selectedAudioDevice = localStorage.getItem('livekit-audio-device') || null;
+      const selectedVideoDevice = localStorage.getItem('livekit-video-device') || null;
       
-      // Set initial state based on PreJoin selections
+      // Set initial state based on localStorage preferences
       micEnabled = initialAudioEnabled;
       cameraEnabled = initialVideoEnabled;
       
@@ -1360,7 +1361,7 @@ function createParticipantTile(participant, isLocal) {
   
   // Create info bar
   const infoBar = document.createElement('div');
-  infoBar.className = 'absolute bottom-0 left-0 right-0 bg-gray-900 bg-opacity-70 p-2 flex justify-between items-center';
+  infoBar.className = 'absolute bottom-0 left-0 right-0 bg-gray-900 bg-opacity-10 p-2 flex justify-between items-center';
   
   // Participant name
   const nameElement = document.createElement('span');
