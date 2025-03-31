@@ -1529,24 +1529,18 @@ function createDirectScreenShareTile(participant, track, heightClass, isExpanded
 
 // Function to determine grid columns class based on participant count
 function getGridClassName(count) {
-  const isMobile = window.innerWidth <= 600;
   const videoGrid = document.getElementById('videoGrid');
-
   if (!videoGrid) return;
 
-  // Remove all existing grid column classes
+  // Clear existing grid classes first
   videoGrid.className = videoGrid.className.replace(/grid-cols-\d+/g, '');
 
-  // For mobile, we'll use our custom class and stop here
-  if (isMobile) {
-    videoGrid.classList.add('mobile-grid');
-    console.log('Setting mobile grid layout for screen width:', window.innerWidth);
-    return;
-  }
+  // Always add mobile-grid class for mobile screens
+  // The media query in CSS will handle when to apply it
+  videoGrid.classList.add('mobile-grid');
 
-  videoGrid.classList.remove('mobile-grid');
-
-  // Add appropriate grid column class (only for non-mobile)
+  // Standard grid classes for desktop view
+  // (These will be overridden by CSS media queries on mobile)
   if (count === 1) {
     console.log('Setting grid to 1 column for participant count:', count);
     videoGrid.classList.add('grid-cols-1');
@@ -1570,19 +1564,46 @@ function getGridClassName(count) {
 
 // Function to determine tile height based on participant count
 function getTileHeight(count) {
+  // Always add mobile-tile class which will be applied by CSS media query
+  // when on mobile screens
   const isMobile = window.innerWidth <= 600;
-
+  
   if (isMobile) {
     return 'mobile-tile';
   }
 
-  // For 1-2 participants, we'll use a special class that allows stretching
+  // Regular height classes for desktop
   if (count <= 2) return 'stretch-container';
   if (count <= 4) return 'h-64';
   if (count <= 9) return 'h-48';
   if (count <= 16) return 'h-40';
-  return 'h-32'; // Fixed height for many participants
+  return 'h-32';
 }
+
+// Setup window resize event listener to update tile layout
+window.addEventListener('resize', debounce(() => {
+  if (room) {
+    // Use the robust participant counting system
+    const participantCount = ParticipantManager.getParticipantCount();
+    console.log("Resize detected, updating grid layout for participants:", participantCount);
+
+    // Let the grid update itself
+    getGridClassName(participantCount);
+
+    // Update height classes
+    const tileHeight = getTileHeight(participantCount);
+    const tiles = document.querySelectorAll('[id^="participant-"]');
+    tiles.forEach(tile => {
+      tile.classList.remove('stretch-container', 'h-64', 'h-48', 'h-40', 'h-32');
+      tile.classList.add(tileHeight);
+
+      // Always add mobile-tile class, will only apply on mobile via CSS
+      if (!tile.classList.contains('mobile-tile')) {
+        tile.classList.add('mobile-tile');
+      }
+    });
+  }
+}, 250)); // Debounce resize events to avoid excessive updates
 
 // Setup audio visualization
 function setupAudioVisualization(participant) {
@@ -1888,4 +1909,17 @@ async function getToken(username, roomName) {
     console.error('Error getting token:', error);
     throw error;
   }
+}
+
+// Debounce function
+function debounce(func, wait) {
+  let timeout;
+  return function (...args) {
+    const context = this;
+    clearTimeout(timeout);
+    timeout = setTimeout(() => {
+      timeout = null;
+      func.apply(context, args);
+    }, wait);
+  };
 }
