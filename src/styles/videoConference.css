@@ -1,12 +1,12 @@
 /* Styling for video tiles within the grid */
-#videoGrid > div {
+/* #videoGrid > div {*/
   /* aspect-ratio: 16/9; */
-  width: 100%;
+  /* width: 100%; */
   /* max-width: 640px; */
   /* margin: 0 auto; */
   /* min-width: 0;
   min-height: 0; */
-}
+/*} */
 
 /* Participant box styles */
 .participant-box {
