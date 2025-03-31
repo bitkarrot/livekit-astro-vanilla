@@ -4,7 +4,7 @@ let isReconnecting = false;
 
 // DOM elements - wait for DOM to be fully loaded before accessing
 let connectModal, permissionsWarning, joinBtn, usernameInput, roomInput;
-let videoGrid, micBtn, cameraBtn, screenBtn, inviteBtn, leaveBtn, settingsBtn;
+let mainContainer, videoGrid, micBtn, cameraBtn, screenBtn, inviteBtn, leaveBtn, settingsBtn;
 let micIcon, micOffIcon, cameraIcon, cameraOffIcon, statusBanner, statusText;
 let audioInputSelect, videoInputSelect, audioOutputSelect, toast, toastMessage;
 let settingsPopup, closeSettingsBtn, mediaDevicesTab, effectsTab, mediaDevicesContent, effectsContent;
@@ -26,6 +26,7 @@ async function init() {
   console.log('Initializing LiveKit app...');
   
   // Initialize DOM elements after DOM is loaded
+  mainContainer = document.getElementById('mainContainer');
   connectModal = document.getElementById('connect-modal');
   permissionsWarning = document.getElementById('permissions-warning');
   joinBtn = document.getElementById('join-btn');
@@ -381,7 +382,7 @@ function setupEventListeners() {
               screenBtn.classList.add('bg-gray-700');
               showToast('Screen sharing stopped');
               // Force update the participant grid
-              updateParticipantGrid();
+              updateGrid();
             }
           });
           
@@ -402,7 +403,7 @@ function setupEventListeners() {
           activeScreenShareId = room.localParticipant.identity;
           
           // Force update the participant grid
-          updateParticipantGrid();
+          updateGrid();
         } catch (screenError) {
           // Handle user cancellation (not a real error)
           if (screenError.name === 'NotAllowedError' || screenError.message.includes('Permission denied')) {
@@ -543,6 +544,15 @@ function setupEventListeners() {
   if (audioOutputSelect) {
     audioOutputSelect.addEventListener('change', handleAudioOutputChange);
   }
+
+  // Setup window resize event listener
+  window.addEventListener('resize', () => {
+    if (room) {
+      const participantCount = Array.from(room.participants?.values() || []).length + 1;
+      console.log("resize get participant count: ", participantCount)
+      getGridClassName(participantCount);
+    }
+  });
 }
 
 // Setup room events
@@ -596,7 +606,7 @@ function setupRoomEvents() {
       Array.from(room.participants?.entries() || []).map(([sid, p]) => ({ sid, identity: p.identity }))
     );
     showToast(`${participant.identity} joined the room`);
-    updateParticipantGrid();
+    updateGrid();
   });
   
   room.on(LivekitClient.RoomEvent.ParticipantDisconnected, (participant) => {
@@ -609,7 +619,7 @@ function setupRoomEvents() {
     }
     
     showToast(`${participant.identity} left the room`);
-    updateParticipantGrid();
+    updateGrid();
   });
   
   // Track events
@@ -625,11 +635,11 @@ function setupRoomEvents() {
       
       // Force a complete grid update to reorganize tiles
       setTimeout(() => {
-        updateParticipantGrid();
+        updateGrid();
       }, 100);
     }
     
-    updateParticipantGrid();
+    updateGrid();
     
     if (track.kind === LivekitClient.Track.Kind.Audio) {
       setupAudioVisualization(participant);
@@ -656,11 +666,11 @@ function setupRoomEvents() {
       
       // Force a complete grid update to reorganize tiles
       setTimeout(() => {
-        updateParticipantGrid();
+        updateGrid();
       }, 100);
     }
     
-    updateParticipantGrid();
+    updateGrid();
   });
   
   room.on(LivekitClient.RoomEvent.TrackMuted, (publication, participant) => {
@@ -674,14 +684,14 @@ function setupRoomEvents() {
       if (activeScreenShareId === participant.identity) {
         // Force a complete grid update to reorganize tiles
         setTimeout(() => {
-          updateParticipantGrid();
+          updateGrid();
         }, 100);
       }
     }
     
     // Only update grid if the room is still connected
     if (room && room.state === LivekitClient.ConnectionState.Connected) {
-      updateParticipantGrid();
+      updateGrid();
     }
   });
   
@@ -697,13 +707,13 @@ function setupRoomEvents() {
       
       // Force a complete grid update to reorganize tiles
       setTimeout(() => {
-        updateParticipantGrid();
+        updateGrid();
       }, 100);
     }
     
     // Only update grid if the room is still connected
     if (room && room.state === LivekitClient.ConnectionState.Connected) {
-      updateParticipantGrid();
+      updateGrid();
     }
   });
   
@@ -945,7 +955,7 @@ async function joinRoom(username, roomName, options = {}) {
       }
       
       // Update UI
-      updateParticipantGrid();
+      updateGrid();
       
       // Update connection status
       updateConnectionStatus('Connected');
@@ -956,7 +966,7 @@ async function joinRoom(username, roomName, options = {}) {
         // Always do an initial refresh when a participant joins
         if (room) {
           // Force an initial update when joining the room
-          updateParticipantGrid();
+          updateGrid();
         }
       }, 3000);
     } catch (connectionError) {
@@ -1192,15 +1202,28 @@ function updateConnectionStatus(status) {
 }
 
 // Update participant grid
-function updateParticipantGrid() {
+function updateGrid() {
   try {
     console.log('Updating participant grid');
-    
     if (!room) {
       console.log('Room object is not available');
       return;
     }
-    
+
+    // // Clear main container
+    // mainContainer.innerHTML = '';
+    // // Recreate video grid
+    // const grid = document.createElement('div');
+    // grid.id = 'videoGrid';
+    // grid.className = 'grid gap-2 h-full';
+    // mainContainer.appendChild(grid);
+    // // Get reference to new grid
+    // const videoGrid = document.getElementById('videoGrid');
+
+    getGridClassName(room.participantCount);
+    // Get the height class for tiles
+    const heightClass = getTileHeight(room.participantCount);
+
     // Keep track of all participants we process
     const processedParticipantIds = new Set();
     const existingTiles = {};
@@ -1224,7 +1247,7 @@ function updateParticipantGrid() {
       } else {
         // Create new local participant tile
         console.log('Creating new local participant tile:', localId);
-        createParticipantTile(room.localParticipant, true);
+        createParticipantTile(room.localParticipant, true, heightClass);
       }
     }
     
@@ -1281,13 +1304,9 @@ function updateParticipantGrid() {
     }
     
     console.log(`Processing ${remoteParticipants.length} remote participants`);
-    remoteParticipants.forEach(participant => {
-      if (!participant || !participant.identity) {
-        console.log('Skipping invalid participant:', participant);
-        return;
-      }
-      
-      const remoteId = participant.identity;
+    const processedRemoteParticipants = [];
+    remoteParticipants.forEach(p => {
+      const remoteId = p.identity;
       processedParticipantIds.add(remoteId);
       
       console.log('Processing remote participant:', remoteId);
@@ -1295,12 +1314,13 @@ function updateParticipantGrid() {
       if (existingTiles[remoteId]) {
         // Update existing remote participant tile
         console.log('Updating existing remote participant tile:', remoteId);
-        updateParticipantTile(existingTiles[remoteId], participant, false);
+        updateParticipantTile(existingTiles[remoteId], p, false);
       } else {
         // Create new remote participant tile
         console.log('Creating new remote participant tile:', remoteId);
-        createParticipantTile(participant, false);
+        createParticipantTile(p, false, heightClass);
       }
+      processedRemoteParticipants.push(p);
     });
     
     // Remove tiles for participants who are no longer in the room
@@ -1311,6 +1331,16 @@ function updateParticipantGrid() {
       }
     });
     
+    // Update grid layout based on participant count
+    const participantCount = Array.from(room.participants?.values() || []).length + 1;
+    getGridClassName(participantCount);
+    // Update tile height based on participant count
+    const tileHeight = getTileHeight(participantCount);
+
+    const tiles = videoGrid.querySelectorAll('[id^="participant-"]');
+    tiles.forEach(tile => {
+      tile.classList.add(tileHeight);
+    });
   } catch (error) {
     console.error('[ERROR] Error updating participant grid:', error);
   }
@@ -1373,7 +1403,7 @@ function updateParticipantTile(tileElement, participant, isLocal) {
       let screenTile = document.getElementById(screenTileId);
       
       if (!screenTile) {
-        createScreenShareTile(participant, screenPublication);
+        createScreenShareTile(participant, screenPublication, heightClass);
       }
     } else if (screenShareIndicator) {
       // Remove screen share indicator if no longer sharing
@@ -1392,11 +1422,16 @@ function updateParticipantTile(tileElement, participant, isLocal) {
 }
 
 // Create a participant tile
-function createParticipantTile(participant, isLocal) {
+function createParticipantTile(participant, isLocal, heightClass, isExpanded=false, isSidebar=false) {
   const tile = document.createElement('div');
   tile.id = `participant-${participant.identity}`;
-  tile.className = 'relative bg-gray-800 rounded-lg overflow-hidden';
-  tile.style.cssText = 'aspect-ratio: 16/9;';
+
+  // Apply appropriate classes, convert to sidebar later
+  const speakerClass = participant.speaking ? 'active-speaker' : '';
+  tile.className = `bg-gray-800 rounded-lg ${heightClass} participant-box ${speakerClass}`;
+
+  // tile.className = `relative bg-gray-800 rounded-lg overflow-hidden`;
+  // tile.style.cssText = 'aspect-ratio: 16/9;';
   
   // Create video container
   const videoContainer = document.createElement('div');
@@ -1481,12 +1516,12 @@ function createParticipantTile(participant, isLocal) {
     videoContainer.appendChild(screenShareIndicator);
     
     // Create a separate tile for the screen share
-    createScreenShareTile(participant, screenPublication);
+    createScreenShareTile(participant, screenPublication, heightClass);
   } else if (isLocal && screenShareTrack) {
     console.log('Local participant has active screen share track but no publication found');
     
     // Create a direct screen share tile using the local track (fallback method)
-    createDirectScreenShareTile(participant, screenShareTrack);
+    createDirectScreenShareTile(participant, screenShareTrack, heightClass);
   }
   
   // Update audio indicator based on track state
@@ -1498,13 +1533,17 @@ function createParticipantTile(participant, isLocal) {
 }
 
 // Create a screen share tile
-function createScreenShareTile(participant, screenPublication) {
+function createScreenShareTile(participant, screenPublication, heightClass, isExpanded = false, isSidebar = false) {
   console.log('Creating screen share tile for participant:', participant.identity);
   
   const tile = document.createElement('div');
   tile.id = `screen-${participant.identity}`;
-  tile.className = 'relative bg-gray-800 rounded-lg overflow-hidden';
-  tile.style.cssText = 'aspect-ratio: 16/9;';
+  // todo apply isSidebar
+  const speakerClass = participant.speaking ? 'active-speaker' : '';
+  tile.className = `relative bg-gray-800 rounded-lg ${heightClass} participant-box ${speakerClass}`;
+  // todo: what is the relative doing here ??
+  //  tile.className = 'relative bg-gray-800 rounded-lg overflow-hidden';
+  //  tile.style.cssText = 'aspect-ratio: 16/9;';
   
   // Create screen container
   const screenContainer = document.createElement('div');
@@ -1538,13 +1577,17 @@ function createScreenShareTile(participant, screenPublication) {
 }
 
 // Create a direct screen share tile using the local track (fallback method)
-function createDirectScreenShareTile(participant, track) {
+function createDirectScreenShareTile(participant, track, heightClass, isExpanded = false, isSidebar = false) {
   console.log('Creating direct screen share tile for participant:', participant.identity);
   
   const tile = document.createElement('div');
   tile.id = `screen-direct-${participant.identity}`;
-  tile.className = 'relative bg-gray-800 rounded-lg overflow-hidden';
-  tile.style.cssText = 'aspect-ratio: 16/9;';
+  // todo apply isSidebar
+  const speakerClass = participant.speaking ? 'active-speaker' : '';
+  tile.className = `bg-gray-800 rounded-lg ${heightClass} participant-box ${speakerClass}`;
+
+  //  tile.className = 'relative bg-gray-800 rounded-lg overflow-hidden';
+//  tile.style.cssText = 'aspect-ratio: 16/9;';
   
   // Create screen container
   const screenContainer = document.createElement('div');
@@ -1572,6 +1615,57 @@ function createDirectScreenShareTile(participant, track) {
   videoGrid.appendChild(tile);
   
   console.log('Direct screen share tile created and added to grid');
+}
+
+// Function to determine grid columns class based on participant count
+function getGridClassName(count) {
+  const isMobile = window.innerWidth <= 600;
+  const videoGrid = document.getElementById('videoGrid');
+
+  if (!videoGrid) return;
+
+  // For mobile, we'll use our custom class
+  if (isMobile) {
+    videoGrid.classList.add('mobile-grid');
+    // videoGrid.classList.remove('screen-share-active');
+    return;
+  }
+
+  videoGrid.classList.remove('mobile-grid');
+
+  // Remove all existing grid column classes
+  videoGrid.className = videoGrid.className.replace(/grid-cols-\d+/g, '');
+
+  // Add appropriate grid column class
+  if (count === 1) {
+    videoGrid.classList.add('grid-cols-1');
+  } else if (count < 2) {
+    videoGrid.classList.add('grid-cols-2');
+  } else if (count <= 4) {
+    videoGrid.classList.add('grid-cols-2');
+  } else if (count <= 9) {
+    videoGrid.classList.add('grid-cols-3');
+  } else if (count <= 16) {
+    videoGrid.classList.add('grid-cols-4');
+  } else {
+    videoGrid.classList.add('grid-cols-5');
+  }
+}
+
+// Function to determine tile height based on participant count
+function getTileHeight(count) {
+  const isMobile = window.innerWidth <= 600;
+
+  if (isMobile) {
+    return 'mobile-tile';
+  }
+
+  // For 1-2 participants, we'll use a special class that allows stretching
+  if (count <= 2) return 'stretch-container';
+  if (count <= 4) return 'h-64';
+  if (count <= 9) return 'h-48';
+  if (count <= 16) return 'h-40';
+  return 'h-32'; // Fixed height for many participants
 }
 
 // Setup audio visualization
@@ -1657,6 +1751,7 @@ function visualizeAudio(participant) {
 }
 
 // Highlight active speakers
+// TODO modify this to an audio bar, instead of the tile if possible
 function highlightActiveSpeakers(speakers) {
   // Reset all participant tiles
   const allTiles = videoGrid.querySelectorAll('[id^="participant-"]');
@@ -1668,7 +1763,7 @@ function highlightActiveSpeakers(speakers) {
   speakers.forEach(speaker => {
     const tile = document.getElementById(`participant-${speaker.identity}`);
     if (tile) {
-      tile.classList.add('border-2', 'border-blue-500');
+      tile.classList.add('border-2', 'border-yellow-500');
     }
   });
 }
@@ -1796,7 +1891,7 @@ function hasAnyScreenShare() {
           remoteParticipants = Object.values(room.participants);
         }
       } catch (e) {
-        console.error('Error checking participants for screen share:', e);
+        console.error('Error getting participants:', e);
       }
     }
     
