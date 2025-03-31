@@ -1534,19 +1534,19 @@ function getGridClassName(count) {
 
   if (!videoGrid) return;
 
-  // For mobile, we'll use our custom class
+  // Remove all existing grid column classes
+  videoGrid.className = videoGrid.className.replace(/grid-cols-\d+/g, '');
+
+  // For mobile, we'll use our custom class and stop here
   if (isMobile) {
     videoGrid.classList.add('mobile-grid');
-    // videoGrid.classList.remove('screen-share-active');
+    console.log('Setting mobile grid layout for screen width:', window.innerWidth);
     return;
   }
 
   videoGrid.classList.remove('mobile-grid');
 
-  // Remove all existing grid column classes
-  videoGrid.className = videoGrid.className.replace(/grid-cols-\d+/g, '');
-
-  // Add appropriate grid column class
+  // Add appropriate grid column class (only for non-mobile)
   if (count === 1) {
     console.log('Setting grid to 1 column for participant count:', count);
     videoGrid.classList.add('grid-cols-1');
