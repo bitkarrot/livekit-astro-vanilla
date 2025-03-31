@@ -2,6 +2,62 @@
 let room;
 let isReconnecting = false;
 
+// Create a centralized participant manager
+const ParticipantManager = {
+  participants: new Map(),
+  screenShares: new Map(),
+  lastGridUpdate: 0,
+  updateTimer: null,
+
+  // Update or add a participant
+  updateParticipant(participant, isLocal) {
+    this.participants.set(participant.identity, {
+      participant,
+      isLocal,
+      lastUpdated: Date.now()
+    });
+    this.scheduleGridUpdate();
+  },
+
+  // Remove a participant
+  removeParticipant(identity) {
+    this.participants.delete(identity);
+    this.scheduleGridUpdate();
+  },
+
+  // Track screen shares
+  updateScreenShare(participant, screenTrack, isActive) {
+    if (isActive) {
+      this.screenShares.set(participant.identity, {
+        participant,
+        track: screenTrack,
+        lastUpdated: Date.now()
+      });
+    } else {
+      this.screenShares.delete(participant.identity);
+    }
+    this.scheduleGridUpdate();
+  },
+
+  // Get count of participants
+  getParticipantCount() {
+    return getRealParticipantCount();
+  },
+
+  // Schedule grid update (with debounce)
+  scheduleGridUpdate() {
+    const now = Date.now();
+    // Debounce updates to prevent too many in a short time
+    if (now - this.lastGridUpdate < 100) {
+      clearTimeout(this.updateTimer);
+    }
+    this.updateTimer = setTimeout(() => {
+      this.lastGridUpdate = Date.now();
+      updateGrid();
+    }, 100);
+  }
+};
+
 // DOM elements - wait for DOM to be fully loaded before accessing
 let connectModal, permissionsWarning, joinBtn, usernameInput, roomInput;
 let mainContainer, videoGrid, micBtn, cameraBtn, screenBtn, inviteBtn, leaveBtn, settingsBtn;
@@ -18,9 +74,16 @@ let audioAnalysers = new Map();
 let roomEventsBound = false;
 let participantRefreshInterval = null;
 let activeScreenShareId = null;
+let serverUrl = "wss://livekit.useguerilla.net";  // Default LiveKit server URL
 
 // Initialize the application
-document.addEventListener('DOMContentLoaded', init);
+document.addEventListener('DOMContentLoaded', () => {
+  init();
+  // Schedule an initial grid update after everything is set up
+  setTimeout(() => {
+    ParticipantManager.scheduleGridUpdate();
+  }, 500);
+});
 
 async function init() {
   console.log('Initializing LiveKit app...');
@@ -124,6 +187,12 @@ async function init() {
           audioEnabled: initialAudioEnabled,
           videoEnabled: initialVideoEnabled
         });
+        // Check if we're already using path-based routing
+        const isPathBasedRouting = window.roomNameFromPath !== undefined;
+        if (!isPathBasedRouting) {
+          // Redirect to the path-based URL
+          window.location.href = `/room/${encodeURIComponent(roomNameFromPath)}`;
+        }
       } catch (error) {
         console.error('[ERROR] Error connecting to room directly:', error);
         showToast('Failed to connect: ' + (error.message || 'Unknown error'));
@@ -342,6 +411,9 @@ function setupEventListeners() {
         screenBtn.classList.add('bg-gray-700');
         showToast('Screen sharing stopped');
         
+        // Update the participant manager
+        ParticipantManager.updateScreenShare(room.localParticipant, null, false);
+
         // Reset active screen share ID
         activeScreenShareId = null;
       } else {
@@ -382,7 +454,7 @@ function setupEventListeners() {
               screenBtn.classList.add('bg-gray-700');
               showToast('Screen sharing stopped');
               // Force update the participant grid
-              updateGrid();
+              ParticipantManager.scheduleGridUpdate();
             }
           });
           
@@ -402,8 +474,11 @@ function setupEventListeners() {
           // Set this participant as the active screen share
           activeScreenShareId = room.localParticipant.identity;
           
+          // Update the participant manager
+          ParticipantManager.updateScreenShare(room.localParticipant, screenShareTrack, true);
+
           // Force update the participant grid
-          updateGrid();
+          ParticipantManager.scheduleGridUpdate();
         } catch (screenError) {
           // Handle user cancellation (not a real error)
           if (screenError.name === 'NotAllowedError' || screenError.message.includes('Permission denied')) {
@@ -544,17 +619,6 @@ function setupEventListeners() {
   if (audioOutputSelect) {
     audioOutputSelect.addEventListener('change', handleAudioOutputChange);
   }
-
-  // Setup window resize event listener
-//   window.addEventListener('resize', () => {
-//     if (room) {
-//       const participantCount = Array.from(room.participants?.values() || []).length + 1;
-//       console.log("resize get participant count: ", participantCount)
-//       console.log("resize getGridClassName")
-//       getGridClassName(participantCount);
-//     }
-//   });
-
 }
 
 // Setup room events
@@ -608,7 +672,7 @@ function setupRoomEvents() {
       Array.from(room.participants?.entries() || []).map(([sid, p]) => ({ sid, identity: p.identity }))
     );
     showToast(`${participant.identity} joined the room`);
-    updateGrid();
+    ParticipantManager.updateParticipant(participant, false);
   });
   
   room.on(LivekitClient.RoomEvent.ParticipantDisconnected, (participant) => {
@@ -621,7 +685,7 @@ function setupRoomEvents() {
     }
     
     showToast(`${participant.identity} left the room`);
-    updateGrid();
+    ParticipantManager.removeParticipant(participant.identity);
   });
   
   // Track events
@@ -635,13 +699,14 @@ function setupRoomEvents() {
       // Set as active screen share
       activeScreenShareId = participant.identity;
       
+      // Update participant manager
+      ParticipantManager.updateScreenShare(participant, track, true);
+
       // Force a complete grid update to reorganize tiles
-      setTimeout(() => {
-        updateGrid();
-      }, 100);
+      ParticipantManager.scheduleGridUpdate();
     }
     
-    updateGrid();
+    ParticipantManager.updateParticipant(participant, false);
     
     if (track.kind === LivekitClient.Track.Kind.Audio) {
       setupAudioVisualization(participant);
@@ -666,13 +731,14 @@ function setupRoomEvents() {
         screenTile.remove();
       }
       
+      // Update participant manager
+      ParticipantManager.updateScreenShare(participant, null, false);
+
       // Force a complete grid update to reorganize tiles
-      setTimeout(() => {
-        updateGrid();
-      }, 100);
+      ParticipantManager.scheduleGridUpdate();
     }
     
-    updateGrid();
+    ParticipantManager.removeParticipant(participant.identity);
   });
   
   room.on(LivekitClient.RoomEvent.TrackMuted, (publication, participant) => {
@@ -685,15 +751,13 @@ function setupRoomEvents() {
       // If this was the active screen share, handle it similar to unsubscribe
       if (activeScreenShareId === participant.identity) {
         // Force a complete grid update to reorganize tiles
-        setTimeout(() => {
-          updateGrid();
-        }, 100);
+        ParticipantManager.scheduleGridUpdate();
       }
     }
     
     // Only update grid if the room is still connected
     if (room && room.state === LivekitClient.ConnectionState.Connected) {
-      updateGrid();
+      ParticipantManager.scheduleGridUpdate();
     }
   });
   
@@ -707,15 +771,16 @@ function setupRoomEvents() {
       // Set as active screen share
       activeScreenShareId = participant.identity;
       
+      // Update participant manager
+      ParticipantManager.updateScreenShare(participant, publication.track, true);
+
       // Force a complete grid update to reorganize tiles
-      setTimeout(() => {
-        updateGrid();
-      }, 100);
+      ParticipantManager.scheduleGridUpdate();
     }
     
     // Only update grid if the room is still connected
     if (room && room.state === LivekitClient.ConnectionState.Connected) {
-      updateGrid();
+      ParticipantManager.scheduleGridUpdate();
     }
   });
   
@@ -774,217 +839,96 @@ function cleanupRoom() {
 // Join a room
 async function joinRoom(username, roomName, options = {}) {
   try {
+    console.log('Joining room:', roomName);
+
     // Show connecting status
     updateConnectionStatus('Connecting...');
     statusBanner.classList.remove('hidden');
     
-    // Get token from server
-    const response = await fetch(`/api/get-token?username=${encodeURIComponent(username)}&room=${encodeURIComponent(roomName)}`);
-    if (!response.ok) {
-      throw new Error(`Failed to get token: ${response.status} ${response.statusText}`);
-    }
+    // Create a room connection
+    const token = await getToken(username, roomName);
     
-    const { token, url } = await response.json();
-    if (!token) {
-      throw new Error('Invalid token response from server');
-    }
-    
-    console.log('Received token and URL from server:', { url });
-    
-    // If we already have a room, disconnect from it first
-    if (room && room.state !== LivekitClient.ConnectionState.Disconnected) {
-      try {
-        await room.disconnect();
-        // Wait a moment for cleanup
-        await new Promise(resolve => setTimeout(resolve, 500));
-      } catch (disconnectError) {
-        console.log('Error disconnecting from previous room:', disconnectError);
-        // Continue anyway
-      }
-    }
-    
-    // Create a new room instance
+    // Initialize LiveKit room
     room = new LivekitClient.Room({
-      adaptiveStream: true,
-      dynacast: true,
-      videoCaptureDefaults: {
-        resolution: { width: 640, height: 480 }
-      }, 
-      publishDefaults: {
-        simulcast: true
-      },
+      adaptiveStream: options.adaptiveStream || true,
+      dynacast: options.dynacast || true,
+      // Enable automatic track subscriptions (more reliable)
       autoSubscribe: true
     });
     
-    // Initialize the participants Map if it doesn't exist
-    if (!room.participants) {
-      console.log('Creating participants Map since it was undefined');
-      room.participants = new Map();
-    }
-    
-    // Setup room events
+    // Setup event handlers
     setupRoomEvents();
     
-    // Connect to room with proper error handling
     try {
-      // Try different URL formats if needed
-      // For local development, ws:// usually works better than wss://
-      let wsUrl = url || 'ws://localhost:7880';
-      
-      // If URL starts with wss:// but we're on localhost, try ws:// instead
-      if (wsUrl.startsWith('wss://localhost')) {
-        wsUrl = wsUrl.replace('wss://', 'ws://');
-      }
-      
-      console.log('Connecting to LiveKit server at:', wsUrl);
-      
-      // Connect with explicit options to ensure we get remote participants
-      await room.connect(wsUrl, token, {
-        autoSubscribe: true
-      });
-      
+      // Connect to room
+      await room.connect(serverUrl, token);
       console.log('Connected to room:', room.name);
-      console.log('Room state after connection:', room.state);
-      console.log('Initial participants:', Array.from(room.participants?.entries() || []).map(([sid, p]) => ({ sid, identity: p.identity })));
       
-      // Manual participant discovery - request the list of participants from the server
-      try {
-        console.log('Attempting manual participant discovery');
-        
-        // If room.participants is empty or undefined, try to get participants from the server
-        if (!room.participants || room.participants.size === 0) {
-          // Try to access the internal LiveKit client if available
-          if (room._client && typeof room._client.getParticipants === 'function') {
-            console.log('Using internal LiveKit client to get participants');
-            const serverParticipants = await room._client.getParticipants();
-            console.log('Server participants:', serverParticipants);
-            
-            // Initialize participants Map if needed
-            if (!room.participants) {
-              room.participants = new Map();
-            }
-            
-            // Add each participant to our Map
-            serverParticipants.forEach(participantInfo => {
-              if (participantInfo.sid && participantInfo.identity && participantInfo.sid !== room.localParticipant.sid) {
-                // Create a basic RemoteParticipant object if the SDK doesn't provide one
-                const remoteParticipant = new LivekitClient.RemoteParticipant(
-                  participantInfo.sid,
-                  participantInfo.identity,
-                  { metadata: participantInfo.metadata }
-                );
-                
-                room.participants.set(participantInfo.sid, remoteParticipant);
-                console.log('Manually added participant:', participantInfo.identity, 'with SID:', participantInfo.sid);
-              }
-            });
-          } else {
-            console.log('LiveKit client getParticipants method not available');
-          }
-        }
-      } catch (discoveryError) {
-        console.error('Error during manual participant discovery:', discoveryError);
+      // Set document title
+      document.title = `LiveKit Room: ${room.name}`;
+      
+      // Get local devices
+      const audioDevices = await navigator.mediaDevices.enumerateDevices();
+      const hasAudio = audioDevices.some(device => device.kind === 'audioinput');
+      const hasVideo = audioDevices.some(device => device.kind === 'videoinput');
+      
+      console.log('Audio available:', hasAudio);
+      console.log('Video available:', hasVideo);
+      
+      // Connect local audio/video
+      const connectOptions = {
+        audio: hasAudio,
+        video: hasVideo ? { facingMode: 'user' } : false
+      };
+      
+      // Connect local tracks
+      if (hasAudio || hasVideo) {
+        await room.localParticipant.enableCameraAndMicrophone();
+        console.log('Local media enabled');
       }
       
-      // Request an update of participants from the server
-      if (typeof room.syncState === 'function') {
-        try {
-          console.log('Requesting participant sync from server');
-          await room.syncState();
-          console.log('Sync completed, participants after sync:', 
-            Array.from(room.participants?.entries() || []).map(([sid, p]) => ({ sid, identity: p.identity }))
-          );
-        } catch (syncError) {
-          console.error('Error syncing room state:', syncError);
-        }
-      } else {
-        console.log('Room.syncState method not available in this version of LiveKit');
-      }
-      
-      // Save current room name
-      currentRoom = roomName;
+      // Update button states
+      micEnabled = hasAudio;
+      cameraEnabled = hasVideo;
+      updateMicButton();
+      updateCameraButton();
       
       // Hide connect modal
       connectModal.classList.add('hidden');
       
-      // Enable local tracks with proper error handling
-      try {
-        // Use the device options from PreJoin if available
-        const connectOptions = {
-          audioDeviceId: options.audioDeviceId,
-          videoDeviceId: options.videoDeviceId
-        };
-        
-        if (options.audioEnabled && options.videoEnabled) {
-          await room.localParticipant.enableCameraAndMicrophone(connectOptions);
-          micEnabled = true;
-          cameraEnabled = true;
-        } else {
-          // Handle each track separately based on user preferences
-          if (options.videoEnabled) {
-            await room.localParticipant.setCameraEnabled(true, connectOptions);
-            cameraEnabled = true;
-          } else {
-            cameraEnabled = false;
-          }
-          
-          if (options.audioEnabled) {
-            await room.localParticipant.setMicrophoneEnabled(true, connectOptions);
-            micEnabled = true;
-          } else {
-            micEnabled = false;
-          }
-        }
-        
-        updateMicButton();
-        updateCameraButton();
-      } catch (mediaError) {
-        console.error('[ERROR] Error enabling camera and microphone:', mediaError);
-        
-        // Still allow connection even if media fails
-        if (mediaError.name === 'NotAllowedError' || mediaError.message.includes('Permission denied')) {
-          permissionsWarning.classList.remove('hidden');
-          showToast('Camera and microphone access denied. Please check your permissions.');
-        } else {
-          showToast('Failed to enable camera and microphone: ' + (mediaError.message || 'Unknown error'));
-        }
-        
-        // Set initial state to reflect reality
-        micEnabled = false;
-        cameraEnabled = false;
-        updateMicButton();
-        updateCameraButton();
+      // Show all room UI
+      mainContainer.classList.remove('hidden');
+      videoGrid.innerHTML = '';
+
+      // Initialize local participant in our manager
+      if (room.localParticipant) {
+        ParticipantManager.updateParticipant(room.localParticipant, true);
       }
       
-      // Update UI
-      updateGrid();
+      // Populate device options
+      await populateDeviceOptions();
+
+      // Get initial participants
+      console.log('Local participant:', room.localParticipant?.identity);
+      console.log('Remote participants:', Array.from(room.participants?.entries() || []).map(([key, p]) => p.identity));
       
       // Update connection status
       updateConnectionStatus('Connected');
       showToast(`Joined room: ${roomName}`);
-      
-      // Start periodic participant refresh with improved detection
-      participantRefreshInterval = setInterval(() => {
-        // Always do an initial refresh when a participant joins
-        if (room) {
-          // Force an initial update when joining the room
-          updateGrid();
-        }
-      }, 3000);
-    } catch (connectionError) {
-      console.error('[ERROR] Error connecting to room:', connectionError);
+    } catch (error) {
+      console.error('Error connecting to room:', error);
       updateConnectionStatus('Connection failed');
-      throw connectionError;
+      showToast('Failed to connect to room: ' + error.message);
+
+      // Show setup UI again
+      connectModal.classList.remove('hidden');
     }
   } catch (error) {
-    console.error('[ERROR] Error joining room:', error);
+    console.error('Error joining room:', error);
+    showToast('Failed to join room: ' + error.message);
     
-    // Check for permission errors
-    if (error.name === 'NotAllowedError' || error.message.includes('Permission denied')) {
-      permissionsWarning.classList.remove('hidden');
-    }
-    
-    throw error;
+    // Show setup UI again
+    connectModal.classList.remove('hidden');
   }
 }
 
@@ -1234,8 +1178,8 @@ function updateGrid() {
         updateParticipantTile(existingTiles[localId], room.localParticipant, true);
       } else {
         // Get an accurate participant count
-        const roomSize = getRealParticipantCount();
-        console.log('number of participants, in updateGrid for local: ', roomSize);
+        const roomSize = ParticipantManager.getParticipantCount();
+        console.log('number of participants, in updateGrid for local: ', roomSize)
 
         // Get the height class for tiles
         const heightClass = getTileHeight(roomSize);
@@ -1245,60 +1189,20 @@ function updateGrid() {
       }
     }
     
-    // Process remote participants
+    // Process remote participants - use our robust method to get participants
     let remoteParticipants = [];
     
-    // Method 1: Check room.participants (standard Map in newer SDK versions)
     if (room.participants instanceof Map) {
       remoteParticipants = Array.from(room.participants.values());
-      console.log('Found remote participants from Map:', remoteParticipants.map(p => p.identity));
-    } 
-    // Method 2: Try alternative ways to get participants
-    else if (room.participants) {
-      try {
-        if (Array.isArray(room.participants)) {
-          remoteParticipants = room.participants;
-        } else if (typeof room.participants === 'object') {
-          remoteParticipants = Object.values(room.participants);
-        }
-        console.log('Found remote participants from object:', remoteParticipants.map(p => p.identity));
-      } catch (e) {
-        console.error('Error getting participants:', e);
-      }
-    }
-    
-    // Method 3: Check room.remoteParticipants as fallback
-    if (remoteParticipants.length === 0 && room.remoteParticipants) {
-      try {
-        if (room.remoteParticipants instanceof Map) {
-          remoteParticipants = Array.from(room.remoteParticipants.values());
-        } else if (Array.isArray(room.remoteParticipants)) {
-          remoteParticipants = room.remoteParticipants;
-        } else if (typeof room.remoteParticipants === 'object') {
-          remoteParticipants = Object.values(room.remoteParticipants);
-        }
-        console.log('Found remote participants from remoteParticipants:', remoteParticipants.map(p => p.identity));
-      } catch (e) {
-        console.error('Error getting remote participants:', e);
-      }
-    }
-    
-    // Method 4: Last resort, check _state
-    if (remoteParticipants.length === 0 && room._state && room._state.participants) {
-      try {
-        const stateParticipants = Object.values(room._state.participants);
-        // Filter out the local participant
-        const remoteStateParticipants = stateParticipants.filter(p => 
-          p && p.sid && room.localParticipant && p.sid !== room.localParticipant.sid);
-        remoteParticipants = remoteStateParticipants;
-        console.log('Found remote participants from _state:', remoteParticipants.map(p => p.identity || 'Unknown'));
-      } catch (e) {
-        console.error('Error getting state participants:', e);
-      }
+    } else if (room.remoteParticipants instanceof Map) {
+      remoteParticipants = Array.from(room.remoteParticipants.values());
+    } else if (room._state && room._state.participants) {
+      const stateParticipants = Object.values(room._state.participants);
+      remoteParticipants = stateParticipants.filter(p =>
+        p && p.sid && room.localParticipant && p.sid !== room.localParticipant.sid);
     }
     
     console.log(`Processing ${remoteParticipants.length} remote participants`);
-    const processedRemoteParticipants = [];
     remoteParticipants.forEach(p => {
       const remoteId = p.identity;
       processedParticipantIds.add(remoteId);
@@ -1311,7 +1215,7 @@ function updateGrid() {
         updateParticipantTile(existingTiles[remoteId], p, false);
       } else {
         // Get an accurate participant count
-        const roomSize = getRealParticipantCount();
+        const roomSize = ParticipantManager.getParticipantCount();
         console.log('number of participants, in updateGrid for remote: ', roomSize);
 
         // Get the height class for tiles
@@ -1319,7 +1223,6 @@ function updateGrid() {
         console.log('Creating new remote participant tile:', remoteId, "room size", roomSize);
         createParticipantTile(p, false, heightClass);
       }
-      processedRemoteParticipants.push(p);
     });
     
     // Remove tiles for participants who are no longer in the room
@@ -1331,7 +1234,7 @@ function updateGrid() {
     });
     
     // Update grid layout based on participant count
-    const participantCount = getRealParticipantCount();
+    const participantCount = ParticipantManager.getParticipantCount();
     console.log('Final participant count for grid layout:', participantCount);
     getGridClassName(participantCount);
     
@@ -1340,6 +1243,9 @@ function updateGrid() {
 
     const tiles = videoGrid.querySelectorAll('[id^="participant-"]');
     tiles.forEach(tile => {
+      // Remove all possible height classes first
+      tile.classList.remove('stretch-container', 'h-64', 'h-48', 'h-40', 'h-32', 'mobile-tile');
+      // Then add the correct one
       tile.classList.add(tileHeight);
     });
   } catch (error) {
@@ -1405,7 +1311,7 @@ function updateParticipantTile(tileElement, participant, isLocal) {
       
       if (!screenTile) {
         // Create new remote participant tile
-        const roomSize = room.participants.size;
+        const roomSize = ParticipantManager.getParticipantCount();
         console.log('number of participants, in updateParticipantTile: ',roomSize)
         getGridClassName(roomSize);
         // Get the height class for tiles
@@ -1854,21 +1760,13 @@ function updateExistingParticipantTiles() {
     
     // Process the local participant
     if (room.localParticipant) {
-      const localId = room.localParticipant.identity;
-      const localTile = document.getElementById(`participant-${localId}`);
-      if (localTile) {
-        updateParticipantTile(localTile, room.localParticipant, true);
-      }
+      ParticipantManager.updateParticipant(room.localParticipant, true);
     }
     
     // Process remote participants
     const remoteParticipants = Array.from(room.participants?.values() || []);
     remoteParticipants.forEach(participant => {
-      const remoteId = participant.identity;
-      const remoteTile = document.getElementById(`participant-${remoteId}`);
-      if (remoteTile) {
-        updateParticipantTile(remoteTile, participant, false);
-      }
+      ParticipantManager.updateParticipant(participant, false);
     });
   } catch (error) {
     console.error('[ERROR] Error updating existing participant tiles:', error);
@@ -1893,16 +1791,12 @@ function hasAnyScreenShare() {
     
     if (room.participants instanceof Map) {
       remoteParticipants = Array.from(room.participants.values());
-    } else if (room.participants) {
-      try {
-        if (Array.isArray(room.participants)) {
-          remoteParticipants = room.participants;
-        } else if (typeof room.participants === 'object') {
-          remoteParticipants = Object.values(room.participants);
-        }
-      } catch (e) {
-        console.error('Error getting participants:', e);
-      }
+    } else if (room.remoteParticipants instanceof Map) {
+      remoteParticipants = Array.from(room.remoteParticipants.values());
+    } else if (room._state && room._state.participants) {
+      const stateParticipants = Object.values(room._state.participants);
+      remoteParticipants = stateParticipants.filter(p =>
+        p && p.sid && room.localParticipant && p.sid !== room.localParticipant.sid);
     }
     
     for (const participant of remoteParticipants) {
@@ -1958,5 +1852,40 @@ function getRealParticipantCount() {
   } catch (e) {
     console.error('Error calculating participant count:', e);
     return Math.max(1, count);
+  }
+}
+
+// Get a LiveKit token for authentication
+async function getToken(username, roomName) {
+  try {
+    // Get token from server
+    const response = await fetch(`/api/get-token?username=${encodeURIComponent(username)}&room=${encodeURIComponent(roomName)}`);
+    if (!response.ok) {
+      throw new Error(`Failed to get token: ${response.status} ${response.statusText}`);
+    }
+    const { token, url } = await response.json();
+    if (!token) {
+      throw new Error('Invalid token response from server');
+    }
+    console.log('Received token and URL from server:', { url });
+    // Update server URL if provided
+    if (url) {
+      serverUrl = url;
+    }
+    // If we already have a room, disconnect from it first
+    if (room && room.state !== LivekitClient.ConnectionState.Disconnected) {
+      try {
+        await room.disconnect();
+        // Wait a moment for cleanup
+        await new Promise(resolve => setTimeout(resolve, 500));
+      } catch (disconnectError) {
+        console.log('Error disconnecting from previous room:', disconnectError);
+        // Continue anyway
+      }
+    }
+    return token;
+  } catch (error) {
+    console.error('Error getting token:', error);
+    throw error;
   }
 }
