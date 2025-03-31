@@ -1233,13 +1233,13 @@ function updateGrid() {
         console.log('Updating existing local participant tile:', localId);
         updateParticipantTile(existingTiles[localId], room.localParticipant, true);
       } else {
-        // Create new remote participant tile
-        const roomSize = room.participants.size + 1;
-        console.log('number of participants, in updateGrid: ', roomSize)
-        getGridClassName(roomSize);
+        // Get an accurate participant count
+        const roomSize = getRealParticipantCount();
+        console.log('number of participants, in updateGrid for local: ', roomSize);
+
         // Get the height class for tiles
         const heightClass = getTileHeight(roomSize);
-                // Create new local participant tile
+        // Create new local participant tile
         console.log('Creating new local participant tile:', localId, "room size", roomSize);
         createParticipantTile(room.localParticipant, true, heightClass);
       }
@@ -1310,10 +1310,10 @@ function updateGrid() {
         console.log('Updating existing remote participant tile:', remoteId);
         updateParticipantTile(existingTiles[remoteId], p, false);
       } else {
-        // Create new remote participant tile
-        const roomSize = room.participants.size + 1;
-        console.log('number of participants, in updateGrid: ', roomSize)
-        getGridClassName(roomSize);
+        // Get an accurate participant count
+        const roomSize = getRealParticipantCount();
+        console.log('number of participants, in updateGrid for remote: ', roomSize);
+
         // Get the height class for tiles
         const heightClass = getTileHeight(roomSize);
         console.log('Creating new remote participant tile:', remoteId, "room size", roomSize);
@@ -1331,8 +1331,10 @@ function updateGrid() {
     });
     
     // Update grid layout based on participant count
-    const participantCount = Array.from(room.participants?.values() || []).length + 1;
+    const participantCount = getRealParticipantCount();
+    console.log('Final participant count for grid layout:', participantCount);
     getGridClassName(participantCount);
+    
     // Update tile height based on participant count
     const tileHeight = getTileHeight(participantCount);
 
@@ -1543,10 +1545,8 @@ function createScreenShareTile(participant, screenPublication, heightClass, isEx
   
   const tile = document.createElement('div');
   tile.id = `screen-${participant.identity}`;
-  // todo apply isSidebar
   const speakerClass = participant.speaking ? 'active-speaker' : '';
   tile.className = `bg-gray-800 rounded-lg ${heightClass} participant-box ${speakerClass}`;
-  // todo: what is the relative doing here ??
   //  tile.className = 'relative bg-gray-800 rounded-lg overflow-hidden';
   // tile.style.cssText = 'aspect-ratio: 16/9;';
   
@@ -1642,16 +1642,22 @@ function getGridClassName(count) {
 
   // Add appropriate grid column class
   if (count === 1) {
+    console.log('Setting grid to 1 column for participant count:', count);
     videoGrid.classList.add('grid-cols-1');
-  } else if (count < 2) {
+  } else if (count === 2) {
+    console.log('Setting grid to 2 columns for participant count:', count);
     videoGrid.classList.add('grid-cols-2');
   } else if (count <= 4) {
+    console.log('Setting grid to 2 columns for participant count:', count);
     videoGrid.classList.add('grid-cols-2');
   } else if (count <= 9) {
+    console.log('Setting grid to 3 columns for participant count:', count);
     videoGrid.classList.add('grid-cols-3');
   } else if (count <= 16) {
+    console.log('Setting grid to 4 columns for participant count:', count);
     videoGrid.classList.add('grid-cols-4');
   } else {
+    console.log('Setting grid to 5 columns for participant count:', count);
     videoGrid.classList.add('grid-cols-5');
   }
 }
@@ -1910,5 +1916,47 @@ function hasAnyScreenShare() {
   } catch (error) {
     console.error('Error checking for screen shares:', error);
     return false;
+  }
+}
+
+// Helper function to get a reliable participant count
+function getRealParticipantCount() {
+  if (!room) return 1;
+  
+  // Count participants in various ways to get the most accurate count
+  let count = 1; // Start with 1 for local participant
+  
+  try {
+    // Method 1: Use participants map
+    if (room.participants instanceof Map) {
+      count = room.participants.size + 1;
+    }
+    // Method 2: Count remote participants (most reliable for synchronization)
+    else if (room.remoteParticipants) {
+      if (room.remoteParticipants instanceof Map) {
+        count = room.remoteParticipants.size + 1;
+      } else if (Array.isArray(room.remoteParticipants)) {
+        count = room.remoteParticipants.length + 1;
+      } else if (typeof room.remoteParticipants === 'object') {
+        count = Object.keys(room.remoteParticipants).length + 1;
+      }
+    }
+    // Method 3: Check state
+    else if (room._state && room._state.participants) {
+      // Count all participants in the state
+      count = Object.keys(room._state.participants).length;
+    }
+    
+    // Check if we have participant elements in the DOM as a fallback
+    const participantElements = document.querySelectorAll('[id^="participant-"]');
+    if (participantElements.length > count) {
+      count = participantElements.length;
+    }
+    
+    console.log('Calculated participant count:', count);
+    return count;
+  } catch (e) {
+    console.error('Error calculating participant count:', e);
+    return Math.max(1, count);
   }
 }
