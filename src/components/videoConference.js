@@ -2439,7 +2439,7 @@ function createParticipantTile(participant, isLocal, heightClass, isAdmin = fals
     } else {
       // If no video, show avatar or initials
       const avatar = document.createElement('div');
-      avatar.className = 'w-full h-full flex items-center justify-center bg-gray-700 text-white text-4xl font-bold';
+      avatar.className = 'w-full h-full flex items-center justify-center bg-gray-800 text-white text-4xl font-bold';
       avatar.textContent = participant.identity.charAt(0).toUpperCase();
       videoContainer.appendChild(avatar);
     }
