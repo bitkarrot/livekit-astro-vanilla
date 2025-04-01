@@ -320,23 +320,10 @@ async function init() {
     }
     
     console.log('LiveKit app initialized successfully');
-    
-    // Remove any developer tools or debug elements that might be showing
-    setTimeout(removeDebugElements, 500);
   } catch (error) {
     console.error('Failed to initialize app:', error);
     showToast('Failed to initialize: ' + error.message);
   }
-}
-
-// Remove any developer tools or debug elements
-function removeDebugElements() {
-  // Try to find and remove the "Send element" box
-  const debugElements = document.querySelectorAll('div[id^="send-element"], div[id^="debug-"], div[id^="dev-"]');
-  debugElements.forEach(el => {
-    console.log('Removing debug element:', el);
-    el.style.display = 'none';
-  });
 }
 
 // Setup event listeners
@@ -1974,66 +1961,6 @@ function showToast(message, duration = 3000) {
   }, duration);
 }
 
-// Update existing participant tiles
-function updateExistingParticipantTiles() {
-  try {
-    console.log('Updating existing participant tiles');
-    
-    // Process the local participant
-    if (room.localParticipant) {
-      ParticipantManager.updateParticipant(room.localParticipant, true);
-    }
-    
-    // Process remote participants
-    const remoteParticipants = Array.from(room.participants?.values() || []);
-    remoteParticipants.forEach(participant => {
-      ParticipantManager.updateParticipant(participant, false);
-    });
-  } catch (error) {
-    console.error('[ERROR] Error updating existing participant tiles:', error);
-  }
-}
-
-// Check if any participant is sharing their screen
-function hasAnyScreenShare() {
-  if (!room) return false;
-  
-  try {
-    // Check local participant
-    if (room.localParticipant) {
-      const localScreenShare = room.localParticipant.getTrackPublication(LivekitClient.Track.Source.ScreenShare);
-      if (localScreenShare && localScreenShare.track && !localScreenShare.isMuted) {
-        return true;
-      }
-    }
-    
-    // Check remote participants
-    let remoteParticipants = [];
-    
-    if (room.participants instanceof Map) {
-      remoteParticipants = Array.from(room.participants.values());
-    } else if (room.remoteParticipants instanceof Map) {
-      remoteParticipants = Array.from(room.remoteParticipants.values());
-    } else if (room._state && room._state.participants) {
-      const stateParticipants = Object.values(room._state.participants);
-      remoteParticipants = stateParticipants.filter(p =>
-        p && p.sid && room.localParticipant && p.sid !== room.localParticipant.sid);
-    }
-    
-    for (const participant of remoteParticipants) {
-      const screenPublication = participant.getTrackPublication(LivekitClient.Track.Source.ScreenShare);
-      if (screenPublication && screenPublication.track && !screenPublication.isMuted) {
-        return true;
-      }
-    }
-    
-    return false;
-  } catch (error) {
-    console.error('Error checking for screen shares:', error);
-    return false;
-  }
-}
-
 // Helper function to get a reliable participant count
 function getRealParticipantCount() {
   if (!room) return 1;
@@ -2755,44 +2682,6 @@ async function connectWithToken(token, onRoomJoined = null) {
   } catch (error) {
     console.error('Error joining room:', error);
     showToast('Failed to join room: ' + error.message);
-  }
-}
-
-// Connect to the LiveKit room
-async function tryConnect() {
-  try {
-    updateConnectionStatus('Connecting...');
-    
-    // Get values from input fields
-    const room = document.getElementById('room').value.trim();
-    const username = document.getElementById('username').value.trim();
-    
-    // Check if inputs are valid
-    if (!room) {
-      showToast('Please enter a room name');
-      return;
-    }
-    if (!username) {
-      showToast('Please enter a username');
-      return;
-    }
-    
-    // Get a token
-    try {
-      const token = await getToken(username, room);
-      await connectWithToken(token);
-    } catch (error) {
-      console.error('Error getting token:', error);
-      updateConnectionStatus('Token Error');
-      showToast('Failed to get token: ' + error.message);
-
-      // Show setup UI again
-      connectModal.classList.remove('hidden');
-    }
-  } catch (error) {
-    console.error('Error connecting:', error);
-    updateConnectionStatus('Connection Failed');
-    showToast('Failed to connect: ' + error.message);
   }
 }
 
