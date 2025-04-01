@@ -8,12 +8,20 @@ const ParticipantManager = {
   screenShares: new Map(),
   lastGridUpdate: 0,
   updateTimer: null,
+  adminViewState: {
+    viewMode: 'normal', // 'normal', 'expanded', or 'screenShareFullScreen'
+    targetParticipantId: null,
+    adminIdentity: null,
+    timestamp: Date.now()
+  },
 
   // Update or add a participant
-  updateParticipant(participant, isLocal) {
+  updateParticipant(participant, isLocal, isAdmin = false) {
     this.participants.set(participant.identity, {
       participant,
       isLocal,
+      isAdmin,
+      isSpeaking: participant.speaking,
       lastUpdated: Date.now()
     });
     this.scheduleGridUpdate();
@@ -26,17 +34,37 @@ const ParticipantManager = {
   },
 
   // Track screen shares
-  updateScreenShare(participant, screenTrack, isActive) {
-    if (isActive) {
-      this.screenShares.set(participant.identity, {
-        participant,
-        track: screenTrack,
-        lastUpdated: Date.now()
-      });
-    } else {
-      this.screenShares.delete(participant.identity);
+  updateScreenShare(participant, track, isActive) {
+    try {
+      const participantId = participant.identity;
+      
+      // If track is null or not active, remove the screen share entry
+      if (!track || !isActive) {
+        console.log('Removing screen share for participant:', participantId);
+        if (this.screenShares.has(participantId)) {
+          this.screenShares.delete(participantId);
+        }
+        
+        // Check if we need to reset expanded view for this screenshare
+        if (localViewState.isScreenShareFullScreen && localViewState.screenShareParticipantId === participantId) {
+          localViewState.isScreenShareFullScreen = false;
+          localViewState.screenShareParticipantId = null;
+        }
+        
+        // Update grid
+        this.scheduleGridUpdate();
+        return;
+      }
+      
+      // Otherwise add or update the screen share entry
+      console.log('Adding screen share for participant:', participantId);
+      this.screenShares.set(participantId, { participant, track });
+      
+      // Update grid
+      this.scheduleGridUpdate();
+    } catch (error) {
+      console.error('Error updating screen share:', error);
     }
-    this.scheduleGridUpdate();
   },
 
   // Get count of participants
@@ -55,6 +83,55 @@ const ParticipantManager = {
       this.lastGridUpdate = Date.now();
       updateGrid();
     }, 100);
+  },
+  
+  // Check if current user is admin
+  isCurrentUserAdmin() {
+    if (!room || !room.localParticipant) return false;
+    
+    const participantInfo = this.participants.get(room.localParticipant.identity);
+    return participantInfo && participantInfo.isAdmin;
+  },
+
+  // Set admin view state and validate permissions
+  setAdminViewState(viewMode, targetParticipantId = null) {
+    // Only admins can change admin view state
+    if (!this.isCurrentUserAdmin()) {
+      console.warn('Non-admin user attempted to set admin view state');
+      return false;
+    }
+    
+    this.adminViewState = {
+      viewMode,
+      targetParticipantId,
+      adminIdentity: room.localParticipant.identity,
+      timestamp: Date.now()
+    };
+    
+    console.log('Admin view state updated:', this.adminViewState);
+    return true;
+  },
+  
+  // Clean up stale participants (memory leak prevention)
+  cleanupStaleParticipants() {
+    const now = Date.now();
+    const staleThreshold = 60000; // 1 minute
+    
+    // Check for participants that haven't been updated recently
+    for (const [identity, info] of this.participants.entries()) {
+      if (now - info.lastUpdated > staleThreshold) {
+        console.log('Removing stale participant:', identity);
+        this.participants.delete(identity);
+      }
+    }
+    
+    // Same for screen shares
+    for (const [identity, info] of this.screenShares.entries()) {
+      if (now - info.lastUpdated > staleThreshold) {
+        console.log('Removing stale screen share:', identity);
+        this.screenShares.delete(identity);
+      }
+    }
   }
 };
 
@@ -75,6 +152,16 @@ let roomEventsBound = false;
 let participantRefreshInterval = null;
 let activeScreenShareId = null;
 let serverUrl = "wss://livekit.useguerilla.net";  // Default LiveKit server URL
+
+// Local view state
+let localViewState = {
+  isExpandedView: false,
+  expandedParticipantId: null,
+  isScreenShareFullScreen: false,
+  screenShareParticipantId: null,
+  screenShareTrack: null,
+  adminOverride: false
+};
 
 // Initialize the application
 document.addEventListener('DOMContentLoaded', () => {
@@ -734,8 +821,8 @@ function setupRoomEvents() {
       // Update participant manager
       ParticipantManager.updateScreenShare(participant, null, false);
 
-      // Force a complete grid update to reorganize tiles
-      ParticipantManager.scheduleGridUpdate();
+      // Return early - don't remove the participant when their screenshare is unsubscribed
+      return;
     }
     
     ParticipantManager.removeParticipant(participant.identity);
@@ -1150,381 +1237,495 @@ function updateConnectionStatus(status) {
 // Update participant grid
 function updateGrid() {
   try {
-    console.log('Updating participant grid');
-    if (!room) {
-      console.log('Room object is not available');
+    // Verify room and container exist
+    if (!room || !mainContainer) {
+      console.error('Cannot update grid: Room or container not available');
       return;
     }
-
-    // Keep track of all participants we process
-    const processedParticipantIds = new Set();
-    const existingTiles = {};
     
-    // First, gather all existing participant tiles
-    const existingElements = videoGrid.querySelectorAll('[id^="participant-"]');
-    existingElements.forEach(el => {
-      const participantId = el.id.replace('participant-', '');
-      existingTiles[participantId] = el;
-    });
+    // Clean up media tracks before grid update
+    detachMediaTracks();
     
-    // Process the local participant
-    if (room.localParticipant) {
-      const localId = room.localParticipant.identity;
-      processedParticipantIds.add(localId);
+    // Clear the main container with safety check
+    clearMainContainer();
+    
+    // Recreate the video grid
+    videoGrid = document.createElement('div');
+    videoGrid.id = 'videoGrid';
+    videoGrid.className = 'grid gap-2 w-full h-full p-2';
+    mainContainer.appendChild(videoGrid);
+    
+    // First check if there's any admin control active
+    if (ParticipantManager.adminViewState.viewMode !== 'normal') {
+      // Handle admin-controlled views
+      const adminState = ParticipantManager.adminViewState;
       
-      if (existingTiles[localId]) {
-        // Update existing local participant tile
-        console.log('Updating existing local participant tile:', localId);
-        updateParticipantTile(existingTiles[localId], room.localParticipant, true);
-      } else {
-        // Get an accurate participant count
-        const roomSize = ParticipantManager.getParticipantCount();
-        console.log('number of participants, in updateGrid for local: ', roomSize)
-
-        // Get the height class for tiles
-        const heightClass = getTileHeight(roomSize);
-        // Create new local participant tile
-        console.log('Creating new local participant tile:', localId, "room size", roomSize);
-        createParticipantTile(room.localParticipant, true, heightClass);
+      if (adminState.viewMode === 'expanded' && adminState.targetParticipantId) {
+        // Render expanded participant view (admin controlled)
+        renderExpandedView(adminState.targetParticipantId, true);
+        return;
+      } else if (adminState.viewMode === 'screenShareFullScreen' && adminState.targetParticipantId) {
+        // Render full-screen screen share (admin controlled)
+        renderScreenShareFullScreen(adminState.targetParticipantId, true);
+        return;
       }
     }
     
-    // Process remote participants - use our robust method to get participants
-    let remoteParticipants = [];
-    
-    if (room.participants instanceof Map) {
-      remoteParticipants = Array.from(room.participants.values());
-    } else if (room.remoteParticipants instanceof Map) {
-      remoteParticipants = Array.from(room.remoteParticipants.values());
-    } else if (room._state && room._state.participants) {
-      const stateParticipants = Object.values(room._state.participants);
-      remoteParticipants = stateParticipants.filter(p =>
-        p && p.sid && room.localParticipant && p.sid !== room.localParticipant.sid);
+    // If no admin control is active, or admin control is not valid, check local view states
+    if (!localViewState.adminOverride) {
+      // Handle local user's expanded view
+      if (localViewState.isExpandedView && localViewState.expandedParticipantId) {
+        renderExpandedView(localViewState.expandedParticipantId, false);
+        return;
+      }
+      
+      // Handle local user's screen share full screen
+      if (localViewState.isScreenShareFullScreen && localViewState.screenShareParticipantId) {
+        renderScreenShareFullScreen(localViewState.screenShareParticipantId, false);
+        return;
+      }
     }
     
-    console.log(`Processing ${remoteParticipants.length} remote participants`);
-    remoteParticipants.forEach(p => {
-      const remoteId = p.identity;
-      processedParticipantIds.add(remoteId);
-      
-      console.log('Processing remote participant:', remoteId);
-
-      if (existingTiles[remoteId]) {
-        // Update existing remote participant tile
-        console.log('Updating existing remote participant tile:', remoteId);
-        updateParticipantTile(existingTiles[remoteId], p, false);
-      } else {
-        // Get an accurate participant count
-        const roomSize = ParticipantManager.getParticipantCount();
-        console.log('number of participants, in updateGrid for remote: ', roomSize);
-
-        // Get the height class for tiles
-        const heightClass = getTileHeight(roomSize);
-        console.log('Creating new remote participant tile:', remoteId, "room size", roomSize);
-        createParticipantTile(p, false, heightClass);
-      }
-    });
-    
-    // Remove tiles for participants who are no longer in the room
-    Object.keys(existingTiles).forEach(participantId => {
-      if (!processedParticipantIds.has(participantId)) {
-        console.log('Removing tile for disconnected participant:', participantId);
-        existingTiles[participantId].remove();
-      }
-    });
-    
-    // Update grid layout based on participant count
-    const participantCount = ParticipantManager.getParticipantCount();
-    console.log('Final participant count for grid layout:', participantCount);
-    getGridClassName(participantCount);
-    
-    // Update tile height based on participant count
-    const tileHeight = getTileHeight(participantCount);
-
-    const tiles = videoGrid.querySelectorAll('[id^="participant-"]');
-    tiles.forEach(tile => {
-      // Remove all possible height classes first
-      tile.classList.remove('stretch-container', 'h-64', 'h-48', 'h-40', 'h-32', 'mobile-tile');
-      // Then add the correct one
-      tile.classList.add(tileHeight);
-    });
+    // If no special views are active, render normal grid
+    renderNormalGrid();
   } catch (error) {
-    console.error('[ERROR] Error updating participant grid:', error);
-  }
-}
-
-// Update an existing participant tile
-function updateParticipantTile(tileElement, participant, isLocal) {
-  try {
-    // Update video if needed
-    const videoContainer = tileElement.querySelector('div:first-child');
-    const existingVideo = videoContainer.querySelector('video');
-    const videoPublication = participant.getTrackPublication(LivekitClient.Track.Source.Camera);
-    
-    if (videoPublication && videoPublication.track && !videoPublication.isMuted) {
-      if (!existingVideo) {
-        // Add video if not present
-        const videoElement = videoPublication.track.attach();
-        videoElement.autoplay = true;
-        videoElement.className = 'w-full h-full object-cover';
+    console.error('Critical error updating grid:', error);
+    try {
+      // Last resort - reconstruct a basic grid
+      if (mainContainer) {
+        mainContainer.innerHTML = '';
+        const basicGrid = document.createElement('div');
+        basicGrid.id = 'videoGrid';
+        basicGrid.className = 'grid gap-2 w-full h-full p-2';
+        mainContainer.appendChild(basicGrid);
         
-        // If this is the local participant, mirror the video
-        if (isLocal) {
-          videoElement.style.transform = 'scaleX(-1)';
+        // Try to restore at least local participant
+        if (room && room.localParticipant) {
+          const heightClass = 'h-64';
+          createParticipantTile(room.localParticipant, true, heightClass);
         }
+      }
+    } catch (finalError) {
+      console.error('Failed to create fallback grid:', finalError);
+    }
+  }
+}
+
+// Render the normal grid view with all participants
+function renderNormalGrid() {
+  try {
+    // Get participant count using the existing robust function
+    const count = getRealParticipantCount();
+    
+    // Apply the appropriate grid class based on participant count
+    videoGrid.className = videoGrid.className.replace(/grid-cols-\d+/g, '');
+    
+    // Use the existing grid class determination logic
+    const gridClassName = getGridClassName(count);
+    videoGrid.classList.add(gridClassName);
+    
+    // Calculate tile height class based on participant count
+    const heightClass = getTileHeight(count);
+    
+    // Add all participants to the grid
+    for (const [identity, info] of ParticipantManager.participants.entries()) {
+      const { participant, isLocal, isAdmin } = info;
+      createParticipantTile(participant, isLocal, heightClass, isAdmin);
+    }
+    
+    // Handle screen shares in normal view
+    renderScreenSharesInGrid();
+  } catch (error) {
+    console.error('Error rendering normal grid:', error);
+  }
+}
+
+// Render a participant in expanded view
+function renderExpandedView(participantId, isAdminControlled = false) {
+  try {
+    const participantInfo = ParticipantManager.participants.get(participantId);
+    if (!participantInfo) {
+      console.warn('Expanded view: Participant not found, reverting to normal view');
+      localViewState.isExpandedView = false;
+      localViewState.expandedParticipantId = null;
+      renderNormalGrid();
+      return;
+    }
+    
+    const { participant, isLocal, isAdmin } = participantInfo;
+    
+    // Clear the main container first
+    mainContainer.innerHTML = '';
+    
+    // Create main expanded view container
+    const expandedView = document.createElement('div');
+    expandedView.className = 'expanded-view flex h-full';
+    
+    // Create sidebar for other participants
+    const sidebar = document.createElement('div');
+    sidebar.className = 'sidebar flex flex-col overflow-y-auto w-48 mr-2';
+    
+    // Create main content area
+    const mainContent = document.createElement('div');
+    mainContent.className = 'main-content flex-grow relative';
+    
+    // Add admin control indicator if needed
+    if (isAdminControlled) {
+      const adminIndicator = document.createElement('div');
+      adminIndicator.className = 'lk-admin-control-indicator absolute top-4 left-4 bg-purple-700 text-white px-3 py-2 rounded-md z-50';
+      adminIndicator.textContent = `Admin controlled view`;
+      mainContent.appendChild(adminIndicator);
+    }
+    
+    // Add expanded video tile to main content
+    createParticipantTile(participant, isLocal, 'h-full', isAdmin, true, mainContent);
+    
+    // Add other participants to sidebar
+    for (const [id, info] of ParticipantManager.participants.entries()) {
+      if (id !== participantId) {
+        const sidebarTile = document.createElement('div');
+        sidebarTile.className = 'sidebar-tile relative h-32 mb-2';
         
-        videoContainer.appendChild(videoElement);
+        createParticipantTile(info.participant, info.isLocal, 'h-full', info.isAdmin, false, sidebarTile);
+        
+        // Add click handler to switch expanded view
+        sidebarTile.addEventListener('click', () => {
+          localViewState.expandedParticipantId = id;
+          updateGrid();
+        });
+        
+        sidebar.appendChild(sidebarTile);
       }
-    } else if (existingVideo) {
-      // Remove video if track is muted or no longer available
-      existingVideo.remove();
     }
     
-    // Update audio indicator
-    const audioIndicator = tileElement.querySelector(`#audio-indicator-${participant.identity}`);
-    const audioPublication = participant.getTrackPublication(LivekitClient.Track.Source.Microphone);
-    
-    if (audioPublication && !audioPublication.isMuted) {
-      audioIndicator.classList.add('bg-green-500');
-      audioIndicator.classList.remove('bg-red-500');
-    } else {
-      audioIndicator.classList.add('bg-red-500');
-      audioIndicator.classList.remove('bg-green-500');
+    // Add screenshares to sidebar
+    for (const [id, info] of ParticipantManager.screenShares.entries()) {
+      const sidebarTile = document.createElement('div');
+      sidebarTile.className = 'sidebar-tile relative h-32 mb-2';
+      
+      // Create thumbnail for screenshare
+      const video = document.createElement('video');
+      video.autoplay = true;
+      video.muted = true;
+      video.playsInline = true;
+      video.className = 'w-full h-full object-contain';
+      info.track.attach(video);
+      sidebarTile.appendChild(video);
+      
+      // Add screenshare label
+      const label = document.createElement('div');
+      label.className = 'absolute bottom-0 left-0 right-0 bg-gray-900 bg-opacity-70 p-2 text-white text-sm';
+      label.textContent = `${id}'s Screen`;
+      sidebarTile.appendChild(label);
+      
+      // Add click handler to switch to screenshare fullscreen
+      sidebarTile.addEventListener('click', () => {
+        toggleScreenShareFullScreen(id);
+      });
+      
+      sidebar.appendChild(sidebarTile);
     }
     
-    // Check for screen share
-    const screenShareIndicator = tileElement.querySelector('.bg-blue-600');
-    const screenPublication = participant.getTrackPublication(LivekitClient.Track.Source.ScreenShare);
+    // Append sidebar and main content to expanded view
+    expandedView.appendChild(sidebar);
+    expandedView.appendChild(mainContent);
     
-    if (screenPublication && screenPublication.track && !screenPublication.isMuted) {
-      // Add screen share indicator if not present
-      if (!screenShareIndicator) {
-        const indicator = document.createElement('div');
-        indicator.className = 'absolute top-2 right-2 bg-blue-600 text-white text-xs px-2 py-1 rounded';
-        indicator.textContent = 'Sharing Screen';
-        videoContainer.appendChild(indicator);
+    // Add close button to return to normal view
+    const closeButton = document.createElement('button');
+    closeButton.className = 'absolute top-4 right-4 bg-gray-800 text-white p-2 rounded-md z-50';
+    closeButton.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>';
+    closeButton.addEventListener('click', () => {
+      if (isAdminControlled && ParticipantManager.isCurrentUserAdmin()) {
+        // Admin releasing control
+        ParticipantManager.setAdminViewState('normal');
+        broadcastAdminViewState({ viewMode: 'normal' });
+      } else if (!isAdminControlled) {
+        // Regular user closing their expanded view
+        localViewState.isExpandedView = false;
+        localViewState.expandedParticipantId = null;
       }
+      updateGrid();
+    });
+    mainContent.appendChild(closeButton);
+    
+    // Add the expanded view to the main container
+    mainContainer.appendChild(expandedView);
+  } catch (error) {
+    console.error('Error rendering expanded view:', error);
+    renderNormalGrid();
+  }
+}
+
+// Render a screen share in full-screen mode
+function renderScreenShareFullScreen(participantId, isAdminControlled = false) {
+  try {
+    const screenShareInfo = ParticipantManager.screenShares.get(participantId);
+    if (!screenShareInfo) {
+      console.warn('Screen share full screen: Screen share not found, reverting to normal view');
+      localViewState.isScreenShareFullScreen = false;
+      localViewState.screenShareParticipantId = null;
+      renderNormalGrid();
+      return;
+    }
+    
+    const { participant, track } = screenShareInfo;
+    const participantInfo = ParticipantManager.participants.get(participantId);
+    const isAdmin = participantInfo && participantInfo.isAdmin;
+    
+    // Clear the main container first
+    mainContainer.innerHTML = '';
+    
+    // Create screen share container
+    const screenShareContainer = document.createElement('div');
+    screenShareContainer.className = 'screen-share-fullscreen flex h-full';
+    
+    // Create sidebar for participants
+    const sidebar = document.createElement('div');
+    sidebar.className = 'sidebar flex flex-col overflow-y-auto w-48 mr-2';
+    
+    // Create main content area for the screenshare
+    const mainScreen = document.createElement('div');
+    mainScreen.className = 'main-content flex-grow relative';
+    
+    // Add admin control indicator if needed
+    if (isAdminControlled) {
+      const adminIndicator = document.createElement('div');
+      adminIndicator.className = 'lk-admin-control-indicator absolute top-4 left-4 bg-purple-700 text-white px-3 py-2 rounded-md z-50';
+      adminIndicator.textContent = `Admin controlled screen share`;
+      mainScreen.appendChild(adminIndicator);
+    }
+    
+    // Add screen share video
+    const video = document.createElement('video');
+    video.autoplay = true;
+    video.muted = true;
+    video.playsInline = true;
+    video.className = 'w-full h-full object-contain';
+    track.attach(video);
+    mainScreen.appendChild(video);
+    
+    // Add presenter info
+    const presenterInfo = document.createElement('div');
+    presenterInfo.className = 'absolute top-4 left-4 bg-gray-800 bg-opacity-75 text-white px-3 py-2 rounded-md';
+    presenterInfo.textContent = `${participantId}'s screen`;
+    if (isAdminControlled) {
+      // Position below admin indicator
+      presenterInfo.className = 'absolute top-16 left-4 bg-gray-800 bg-opacity-75 text-white px-3 py-2 rounded-md';
+    }
+    mainScreen.appendChild(presenterInfo);
+    
+    // Add all participants to sidebar
+    for (const [id, info] of ParticipantManager.participants.entries()) {
+      const sidebarTile = document.createElement('div');
+      sidebarTile.className = 'sidebar-tile relative h-32 mb-2';
       
-      // Create or update screen share tile
-      const screenTileId = `screen-${participant.identity}`;
-      let screenTile = document.getElementById(screenTileId);
+      createParticipantTile(info.participant, info.isLocal, 'h-full', info.isAdmin, false, sidebarTile);
       
-      if (!screenTile) {
-        // Create new remote participant tile
-        const roomSize = ParticipantManager.getParticipantCount();
-        console.log('number of participants, in updateParticipantTile: ',roomSize)
-        getGridClassName(roomSize);
-        // Get the height class for tiles
-        const heightClass = getTileHeight(roomSize);
-        createScreenShareTile(participant, screenPublication, heightClass);
+      sidebar.appendChild(sidebarTile);
+    }
+    
+    // Add other screenshares to sidebar (excluding the current fullscreen one)
+    for (const [id, info] of ParticipantManager.screenShares.entries()) {
+      if (id !== participantId) {  // Skip the current fullscreen screenshare
+        const sidebarTile = document.createElement('div');
+        sidebarTile.className = 'sidebar-tile relative h-32 mb-2';
+        
+        // Create thumbnail for screenshare
+        const videoThumb = document.createElement('video');
+        videoThumb.autoplay = true;
+        videoThumb.muted = true;
+        videoThumb.playsInline = true;
+        videoThumb.className = 'w-full h-full object-contain';
+        info.track.attach(videoThumb);
+        sidebarTile.appendChild(videoThumb);
+        
+        // Add screenshare label
+        const label = document.createElement('div');
+        label.className = 'absolute bottom-0 left-0 right-0 bg-gray-900 bg-opacity-70 p-2 text-white text-sm';
+        label.textContent = `${id}'s Screen`;
+        sidebarTile.appendChild(label);
+        
+        // Add click handler to switch to this screenshare fullscreen
+        sidebarTile.addEventListener('click', () => {
+          toggleScreenShareFullScreen(id);
+        });
+        
+        sidebar.appendChild(sidebarTile);
       }
-    } else if (screenShareIndicator) {
-      // Remove screen share indicator if no longer sharing
-      screenShareIndicator.remove();
-      
-      // Remove screen share tile
-      const screenTileId = `screen-${participant.identity}`;
-      const screenTile = document.getElementById(screenTileId);
-      if (screenTile) {
-        screenTile.remove();
+    }
+    
+    // Add close button to return to normal view
+    const closeButton = document.createElement('button');
+    closeButton.className = 'absolute top-4 right-4 bg-gray-800 text-white p-2 rounded-md z-50';
+    closeButton.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>';
+    closeButton.addEventListener('click', () => {
+      if (isAdminControlled && ParticipantManager.isCurrentUserAdmin()) {
+        // Admin releasing control
+        ParticipantManager.setAdminViewState('normal');
+        broadcastAdminViewState({ viewMode: 'normal' });
+      } else if (!isAdminControlled) {
+        // Regular user closing their full-screen view
+        localViewState.isScreenShareFullScreen = false;
+        localViewState.screenShareParticipantId = null;
       }
+      updateGrid();
+    });
+    mainScreen.appendChild(closeButton);
+    
+    // Append sidebar and main content to container
+    screenShareContainer.appendChild(sidebar);
+    screenShareContainer.appendChild(mainScreen);
+    
+    // Add the container to the main container
+    mainContainer.appendChild(screenShareContainer);
+  } catch (error) {
+    console.error('Error rendering screen share full screen:', error);
+    renderNormalGrid();
+  }
+}
+
+// Helper function to clear main container and remove event listeners
+function clearMainContainer() {
+  try {
+    // Get all elements with event listeners
+    const elementsWithListeners = mainContainer.querySelectorAll(
+      '.expand-button, .screen-fullscreen-toggle, .admin-control-button, .sidebar-tile'
+    );
+    
+    // Clean up each element
+    elementsWithListeners.forEach(cleanupElement);
+    
+    // Now clear the container
+    mainContainer.innerHTML = '';
+  } catch (error) {
+    console.error('Error clearing main container:', error);
+    // Fallback to direct clear
+    mainContainer.innerHTML = '';
+  }
+}
+
+// Helper to cleanup elements with event listeners
+function cleanupElement(element) {
+  try {
+    // Clone the element without event listeners
+    const clone = element.cloneNode(true);
+    // Replace the original with the clone
+    if (element.parentNode) {
+      element.parentNode.replaceChild(clone, element);
     }
   } catch (error) {
-    console.error('Error updating participant tile:', error);
+    console.error('Error cleaning up element:', error);
   }
 }
 
-// Create a participant tile
-function createParticipantTile(participant, isLocal, heightClass, isExpanded=false, isSidebar=false) {
-  const tile = document.createElement('div');
-  tile.id = `participant-${participant.identity}`;
-
-  // Apply appropriate classes, convert to sidebar later
-  const speakerClass = participant.speaking ? 'active-speaker' : '';
-  tile.className = `bg-gray-800 rounded-lg ${heightClass} participant-box ${speakerClass}`;
-
-  // tile.className = `relative bg-gray-800 rounded-lg overflow-hidden`;
-  // tile.style.cssText = 'aspect-ratio: 16/9;';
-  
-  // Create video container
-  const videoContainer = document.createElement('div');
-  videoContainer.className = 'absolute inset-0';
-  tile.appendChild(videoContainer);
-  
-  // Create info bar
-  const infoBar = document.createElement('div');
-  infoBar.className = 'absolute bottom-0 left-0 right-0 bg-gray-900 bg-opacity-10 p-2 flex justify-between items-center';
-  
-  // Participant name
-  const nameElement = document.createElement('span');
-  nameElement.className = 'text-white text-sm';
-  nameElement.textContent = isLocal ? `${participant.identity} (You)` : participant.identity;
-  infoBar.appendChild(nameElement);
-  
-  // Indicators container
-  const indicators = document.createElement('div');
-  indicators.className = 'flex items-center gap-2';
-  
-  // Audio indicator
-  const audioIndicator = document.createElement('div');
-  audioIndicator.className = 'h-4 w-4 rounded-full bg-red-500';
-  audioIndicator.id = `audio-indicator-${participant.identity}`;
-  indicators.appendChild(audioIndicator);
-  
-  // Connection quality indicator
-  const qualityIndicator = document.createElement('div');
-  qualityIndicator.className = 'text-white text-xs';
-  qualityIndicator.id = `connection-quality-${participant.identity}`;
-  qualityIndicator.innerHTML = `<svg class="w-4 h-4" fill="currentColor" stroke="currentColor" viewBox="0 0 24 24">
-    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 14v4M12 10v8M16 6v12"></path>
-  </svg>`;
-  indicators.appendChild(qualityIndicator);
-  
-  infoBar.appendChild(indicators);
-  tile.appendChild(infoBar);
-  videoGrid.appendChild(tile);
-  
-  // Attach video track if available
-  const videoPublication = participant.getTrackPublication(LivekitClient.Track.Source.Camera);
-  if (videoPublication && videoPublication.track && !videoPublication.isMuted) {
-    const videoElement = videoPublication.track.attach();
-    videoElement.autoplay = true;
-    videoElement.className = 'w-full h-full object-cover';
-    videoContainer.appendChild(videoElement);
+// Helper to detach media tracks from video/audio elements
+function detachMediaTracks() {
+  try {
+    // Find all video and audio elements in the container
+    const mediaElements = mainContainer.querySelectorAll('video, audio');
     
-    // If this is the local participant, mirror the video
-    if (isLocal) {
-      videoElement.style.transform = 'scaleX(-1)';
-    }
+    mediaElements.forEach(element => {
+      // Pause the element first
+      if (element.pause) {
+        element.pause();
+      }
+      
+      // Remove the srcObject
+      if (element.srcObject) {
+        element.srcObject = null;
+      }
+    });
+  } catch (error) {
+    console.error('Error detaching media tracks:', error);
   }
-  
-  // Check if screen share is active
-  let screenPublication = participant.getTrackPublication(LivekitClient.Track.Source.ScreenShare);
-  
-  // If we're the local participant and have an active screen share track but no publication found yet
-  if (isLocal && screenShareTrack && !screenPublication) {
-    console.log('Local participant has active screen share track but no publication found via getTrackPublication');
+}
+
+// Toggle expanded view for a participant
+function toggleExpandedView(participantId) {
+  try {
+    const isCurrentlyExpanded = localViewState.isExpandedView && 
+                                localViewState.expandedParticipantId === participantId;
     
-    // Try to find the screen share publication by iterating through all track publications
-    const publications = participant.trackPublications;
-    console.log('All local participant publications:', Array.from(publications.values()).map(p => ({ sid: p.trackSid, source: p.source, kind: p.kind })));
-    
-    // Find the screen share publication manually
-    for (const pub of publications.values()) {
-      if (pub.track && pub.track === screenShareTrack) {
-        console.log('Found screen share publication by direct track comparison:', pub.trackSid);
-        screenPublication = pub;
-        break;
+    // If admin, broadcast this change
+    if (ParticipantManager.isCurrentUserAdmin()) {
+      // Update admin view state
+      if (isCurrentlyExpanded) {
+        // If already expanded, toggle back to normal view
+        ParticipantManager.setAdminViewState('normal');
+        broadcastAdminViewState({ viewMode: 'normal' });
+      } else {
+        // Toggle to expanded view
+        ParticipantManager.setAdminViewState('expanded', participantId);
+        broadcastAdminViewState({ 
+          viewMode: 'expanded', 
+          targetParticipantId: participantId 
+        });
+      }
+    } else {
+      // Regular user toggle
+      if (isCurrentlyExpanded) {
+        // If already expanded, toggle back to normal view
+        localViewState.isExpandedView = false;
+        localViewState.expandedParticipantId = null;
+      } else {
+        // Toggle to expanded view
+        localViewState.isExpandedView = true;
+        localViewState.expandedParticipantId = participantId;
+        // Reset screen share full screen if active
+        localViewState.isScreenShareFullScreen = false;
+        localViewState.screenShareParticipantId = null;
       }
     }
-  }
-  
-  if (screenPublication && screenPublication.track && !screenPublication.isMuted) {
-    console.log('Found screen share publication for participant:', participant.identity, 'trackSid:', screenPublication.trackSid);
     
-    // Create a screen share indicator
-    const screenShareIndicator = document.createElement('div');
-    screenShareIndicator.className = 'absolute top-2 right-2 bg-blue-600 text-white text-xs px-2 py-1 rounded';
-    screenShareIndicator.textContent = 'Sharing Screen';
-    videoContainer.appendChild(screenShareIndicator);
-    
-    // Create a separate tile for the screen share
-    createScreenShareTile(participant, screenPublication, heightClass);
-  } else if (isLocal && screenShareTrack) {
-    console.log('Local participant has active screen share track but no publication found');
-    
-    // Create a direct screen share tile using the local track (fallback method)
-    createDirectScreenShareTile(participant, screenShareTrack, heightClass);
-  }
-  
-  // Update audio indicator based on track state
-  const audioPublication = participant.getTrackPublication(LivekitClient.Track.Source.Microphone);
-  if (audioPublication && !audioPublication.isMuted) {
-    audioIndicator.classList.add('bg-green-500');
-    audioIndicator.classList.remove('bg-red-500');
+    // Update the UI
+    updateGrid();
+  } catch (error) {
+    console.error('Error toggling expanded view:', error);
   }
 }
 
-// Create a screen share tile
-function createScreenShareTile(participant, screenPublication, heightClass, isExpanded = false, isSidebar = false) {
-  console.log('Creating screen share tile for participant:', participant.identity);
-  
-  const tile = document.createElement('div');
-  tile.id = `screen-${participant.identity}`;
-  const speakerClass = participant.speaking ? 'active-speaker' : '';
-  tile.className = `bg-gray-800 rounded-lg ${heightClass} participant-box ${speakerClass}`;
-  //  tile.className = 'relative bg-gray-800 rounded-lg overflow-hidden';
-  // tile.style.cssText = 'aspect-ratio: 16/9;';
-  
-  // Create screen container
-  const screenContainer = document.createElement('div');
-  screenContainer.className = 'absolute inset-0';
-  
-  // Attach screen share track
-  const screenElement = screenPublication.track.attach();
-  screenElement.className = 'w-full h-full object-contain';
-  screenContainer.appendChild(screenElement);
-  tile.appendChild(screenContainer);
-  
-  // Create info bar
-  const infoBar = document.createElement('div');
-  infoBar.className = 'absolute bottom-0 left-0 right-0 bg-gray-900 bg-opacity-70 p-2 flex justify-between items-center';
-  
-  // Screen share label
-  const label = document.createElement('div');
-  label.className = 'text-white text-sm';
-  label.textContent = `${participant.identity}'s Screen`;
-  infoBar.appendChild(label);
-  
-  tile.appendChild(infoBar);
-  videoGrid.appendChild(tile);
-  
-  // Track this screen share as the active one
-  activeScreenShareId = participant.identity;
-  
-  console.log('Screen share tile created and added to grid');
-  
-  return tile;
-}
-
-// Create a direct screen share tile using the local track (fallback method)
-function createDirectScreenShareTile(participant, track, heightClass, isExpanded = false, isSidebar = false) {
-  console.log('Creating direct screen share tile for participant:', participant.identity);
-  
-  const tile = document.createElement('div');
-  tile.id = `screen-direct-${participant.identity}`;
-  // todo apply isSidebar
-  const speakerClass = participant.speaking ? 'active-speaker' : '';
-  tile.className = `bg-gray-800 rounded-lg ${heightClass} participant-box ${speakerClass}`;
-  //  tile.className = 'relative bg-gray-800 rounded-lg overflow-hidden';
-  // tile.style.cssText = 'aspect-ratio: 16/9;';
-  
-  // Create screen container
-  const screenContainer = document.createElement('div');
-  screenContainer.className = 'absolute inset-0';
-  tile.appendChild(screenContainer);
-  
-  // Attach screen share directly
-  console.log('Attaching screen share track directly');
-  const screenElement = track.mediaStreamTrack ? new MediaStream([track.mediaStreamTrack]).getTracks()[0].attach() : track.attach();
-  screenElement.autoplay = true;
-  screenElement.className = 'w-full h-full object-contain';
-  screenContainer.appendChild(screenElement);
-  
-  // Create info bar
-  const infoBar = document.createElement('div');
-  infoBar.className = 'absolute bottom-0 left-0 right-0 bg-gray-900 bg-opacity-70 p-2';
-  
-  // Screen share label
-  const label = document.createElement('div');
-  label.className = 'text-white text-sm';
-  label.textContent = `${participant.identity}'s Screen (Direct)`;
-  infoBar.appendChild(label);
-  
-  tile.appendChild(infoBar);
-  videoGrid.appendChild(tile);
-  
-  console.log('Direct screen share tile created and added to grid');
+// Toggle full-screen screen share
+function toggleScreenShareFullScreen(participantId) {
+  try {
+    const isCurrentlyFullScreen = localViewState.isScreenShareFullScreen && 
+                                 localViewState.screenShareParticipantId === participantId;
+    
+    // If admin, broadcast this change
+    if (ParticipantManager.isCurrentUserAdmin()) {
+      // Update admin view state
+      if (isCurrentlyFullScreen) {
+        // If already full screen, toggle back to normal view
+        ParticipantManager.setAdminViewState('normal');
+        broadcastAdminViewState({ viewMode: 'normal' });
+      } else {
+        // Toggle to full screen screen share
+        ParticipantManager.setAdminViewState('screenShareFullScreen', participantId);
+        broadcastAdminViewState({ 
+          viewMode: 'screenShareFullScreen', 
+          targetParticipantId: participantId 
+        });
+      }
+    } else {
+      // Regular user toggle
+      if (isCurrentlyFullScreen) {
+        // If already full screen, toggle back to normal view
+        localViewState.isScreenShareFullScreen = false;
+        localViewState.screenShareParticipantId = null;
+      } else {
+        // Toggle to full screen screen share
+        localViewState.isScreenShareFullScreen = true;
+        localViewState.screenShareParticipantId = participantId;
+        // Reset expanded view if active
+        localViewState.isExpandedView = false;
+        localViewState.expandedParticipantId = null;
+      }
+    }
+    
+    // Update the UI
+    updateGrid();
+  } catch (error) {
+    console.error('Error toggling screen share full screen:', error);
+  }
 }
 
 // Function to determine grid columns class based on participant count
@@ -1755,8 +1956,7 @@ function updateConnectionQuality(quality, participant) {
       qualityText = 'Poor';
       break;
     default:
-      qualityClass = 'text-red-500';
-      qualityText = 'Unknown';
+      break;
   }
   
   qualityIndicator.className = `text-xs ${qualityClass}`;
@@ -1879,20 +2079,26 @@ function getRealParticipantCount() {
 // Get a LiveKit token for authentication
 async function getToken(username, roomName) {
   try {
+    const isAdmin = determineIfAdmin(username);
+    console.log('Getting token for user:', username, 'room:', roomName, 'isAdmin:', isAdmin);
+    
     // Get token from server
     const response = await fetch(`/api/get-token?username=${encodeURIComponent(username)}&room=${encodeURIComponent(roomName)}`);
     if (!response.ok) {
       throw new Error(`Failed to get token: ${response.status} ${response.statusText}`);
     }
+    
     const { token, url } = await response.json();
     if (!token) {
       throw new Error('Invalid token response from server');
     }
     console.log('Received token and URL from server:', { url });
+    
     // Update server URL if provided
     if (url) {
       serverUrl = url;
     }
+    
     // If we already have a room, disconnect from it first
     if (room && room.state !== LivekitClient.ConnectionState.Disconnected) {
       try {
@@ -1904,9 +2110,16 @@ async function getToken(username, roomName) {
         // Continue anyway
       }
     }
+    
+    // Set current room
+    currentRoom = roomName;
+    
+    console.log('Token acquired for room:', roomName, 'isAdmin:', isAdmin);
+    
     return token;
   } catch (error) {
     console.error('Error getting token:', error);
+    showToast('Failed to get access token: ' + (error.message || 'Unknown error'));
     throw error;
   }
 }
@@ -1921,5 +2134,678 @@ function debounce(func, wait) {
       timeout = null;
       func.apply(context, args);
     }, wait);
+  };
+}
+
+// Helper function to determine if a username should have admin privileges
+function determineIfAdmin(username) {
+  // List of admin usernames (for testing purposes)
+  const adminUsernames = [
+    'admin',
+    'moderator',
+    'host',
+    'teacher',
+    'instructor'
+  ];
+  
+  // Check if username is in the admin list (case insensitive)
+  return adminUsernames.some(admin => 
+    username.toLowerCase() === admin.toLowerCase() ||
+    username.toLowerCase().startsWith(admin.toLowerCase() + '-') ||
+    username.toLowerCase().endsWith('-' + admin.toLowerCase())
+  );
+}
+
+// Setup LiveKit data channel for admin controls
+function setupAdminDataChannel() {
+  try {
+    if (!room) {
+      console.error('Cannot setup admin data channel: Room not initialized');
+      return;
+    }
+    
+    console.log('Setting up admin data channel');
+    
+    // Store a flag to prevent duplicate listeners
+    if (room._adminDataChannelSetup) {
+      console.log('Admin data channel already set up');
+      return;
+    }
+    
+    // Create a handler function for data channel messages
+    const handleDataChannelMessage = (payload, participant, kind) => {
+      // Only process data channel messages
+      if (kind !== LivekitClient.DataPacket_Kind.RELIABLE) return;
+      
+      try {
+        // Parse the message
+        const data = JSON.parse(new TextDecoder().decode(payload));
+        
+        // Check if this is an admin control message
+        if (data && data.type === 'admin-control' && data.adminViewState) {
+          console.log('Received admin control message:', data);
+          handleAdminControlMessage(data, participant);
+        }
+      } catch (parseError) {
+        console.error('Error parsing data channel message:', parseError);
+      }
+    };
+    
+    // Store the handler and add the listener
+    room._adminDataHandler = handleDataChannelMessage;
+    room.on(LivekitClient.RoomEvent.DataReceived, room._adminDataHandler);
+    
+    // Mark as set up
+    room._adminDataChannelSetup = true;
+    
+    console.log('Admin data channel setup complete');
+  } catch (error) {
+    console.error('Error setting up admin data channel:', error);
+  }
+}
+
+// Handle incoming admin control messages
+function handleAdminControlMessage(data, sender) {
+  try {
+    // Validate input parameters
+    if (!data || !sender) {
+      console.warn('Invalid data or sender in admin control message');
+      return;
+    }
+    
+    // Verify sender is an admin
+    const senderInfo = ParticipantManager.participants.get(sender.identity);
+    if (!senderInfo || !senderInfo.isAdmin) {
+      console.warn('Received admin control message from non-admin user:', sender.identity);
+      return;
+    }
+    
+    // Validate admin state data
+    const adminState = data.adminViewState;
+    if (!adminState || !adminState.viewMode || !adminState.timestamp) {
+      console.warn('Invalid admin state data:', adminState);
+      return;
+    }
+    
+    // Only accept newer state updates
+    if (ParticipantManager.adminViewState.timestamp >= adminState.timestamp) {
+      console.log('Ignoring outdated admin state update');
+      return;
+    }
+    
+    // Update admin view state with validated data
+    ParticipantManager.adminViewState = {
+      viewMode: adminState.viewMode,
+      targetParticipantId: adminState.targetParticipantId || null,
+      adminIdentity: sender.identity,
+      timestamp: adminState.timestamp
+    };
+    
+    // Update local state to reflect admin control
+    localViewState.adminOverride = (adminState.viewMode !== 'normal');
+    
+    // Show toast notification
+    if (adminState.viewMode === 'normal') {
+      showToast(`Admin ${sender.identity} released control`);
+    } else {
+      showToast(`Admin ${sender.identity} is controlling the view`);
+    }
+    
+    // Update the UI
+    updateGrid();
+  } catch (error) {
+    console.error('Error handling admin control message:', error, 'data:', data);
+    
+    // Fallback - reset to normal view if error occurs
+    try {
+      localViewState.adminOverride = false;
+      updateGrid();
+    } catch (fallbackError) {
+      console.error('Failed to reset view after admin control error:', fallbackError);
+    }
+  }
+}
+
+// Broadcast admin view state to all participants
+function broadcastAdminViewState(adminViewState) {
+  try {
+    // Input validation
+    if (!adminViewState || !adminViewState.viewMode) {
+      console.error('Invalid admin view state for broadcast:', adminViewState);
+      return false;
+    }
+    
+    if (!room || !room.localParticipant) {
+      console.error('Cannot broadcast admin state: Room not connected');
+      return false;
+    }
+    
+    // Verify current user is admin
+    if (!ParticipantManager.isCurrentUserAdmin()) {
+      console.warn('Non-admin user attempted to broadcast admin state');
+      return false;
+    }
+    
+    // Prepare the message with validated data
+    const message = {
+      type: 'admin-control',
+      adminViewState: {
+        viewMode: adminViewState.viewMode,
+        targetParticipantId: adminViewState.targetParticipantId || null,
+        adminIdentity: room.localParticipant.identity,
+        timestamp: Date.now()  // Use fresh timestamp for broadcast
+      }
+    };
+    
+    try {
+      // Convert to binary data
+      const encoder = new TextEncoder();
+      const data = encoder.encode(JSON.stringify(message));
+      
+      // Send to all participants
+      room.localParticipant.publishData(data, LivekitClient.DataPacket_Kind.RELIABLE);
+      
+      console.log('Admin view state broadcasted:', message.adminViewState);
+      
+      // Update local state
+      localViewState.adminOverride = (adminViewState.viewMode !== 'normal');
+      
+      return true;
+    } catch (publishError) {
+      console.error('Error publishing admin control data:', publishError);
+      return false;
+    }
+  } catch (error) {
+    console.error('Error broadcasting admin view state:', error);
+    return false;
+  }
+}
+
+// Function to render screen shares in the normal grid view
+function renderScreenSharesInGrid() {
+  for (const [identity, info] of ParticipantManager.screenShares.entries()) {
+    const { participant, track } = info;
+    const participantInfo = ParticipantManager.participants.get(identity);
+    const isAdmin = participantInfo && participantInfo.isAdmin;
+    
+    // Get the same height class used for participant tiles
+    const count = getRealParticipantCount();
+    const heightClass = getTileHeight(count);
+    
+    // Create screen share tile
+    const tile = document.createElement('div');
+    tile.id = `screen-${identity}`;
+    tile.className = `screen-share-tile bg-gray-800 rounded-lg ${heightClass} relative overflow-hidden`;
+    videoGrid.appendChild(tile);
+    
+    // Create video element for the screen share
+    const video = document.createElement('video');
+    video.autoplay = true;
+    video.muted = true;
+    video.playsInline = true;
+    video.className = 'w-full h-full object-contain';
+    track.attach(video);
+    tile.appendChild(video);
+    
+    // Create info bar at the bottom
+    const infoBar = document.createElement('div');
+    infoBar.className = 'absolute bottom-0 left-0 right-0 bg-gray-900 bg-opacity-70 p-2 flex justify-between items-center';
+    
+    // Screen share label
+    const label = document.createElement('span');
+    label.className = 'text-white text-sm';
+    label.textContent = `${identity}'s Screen`;
+    if (isAdmin) {
+      label.innerHTML = `${identity}'s Screen <span class="lk-admin-star ml-1 text-yellow-400">★</span>`;
+    }
+    infoBar.appendChild(label);
+    
+    // Add the info bar to the tile
+    tile.appendChild(infoBar);
+    
+    // Full screen toggle button in top-right corner (matching participant tiles)
+    const fullScreenToggle = document.createElement('button');
+    fullScreenToggle.className = 'screen-fullscreen-toggle text-white p-1 bg-gray-700 hover:bg-gray-600 rounded absolute top-2 right-2 z-10';
+    fullScreenToggle.innerHTML = `
+      <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <polyline points="15 3 21 3 21 9"></polyline>
+        <polyline points="9 21 3 21 3 15"></polyline>
+        <line x1="21" y1="3" x2="14" y2="10"></line>
+        <line x1="3" y1="21" x2="10" y2="14"></line>
+      </svg>
+    `;
+    fullScreenToggle.addEventListener('click', () => {
+      toggleScreenShareFullScreen(identity);
+    });
+    tile.appendChild(fullScreenToggle);
+    
+    // Only show admin control for admins (in the info bar)
+    if (ParticipantManager.isCurrentUserAdmin()) {
+      const adminControlButton = document.createElement('button');
+      adminControlButton.className = 'admin-control-button text-white p-1 bg-purple-700 hover:bg-purple-600 rounded ml-1';
+      adminControlButton.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"></path></svg>';
+      adminControlButton.title = "Control this screen share for all participants";
+      adminControlButton.addEventListener('click', () => {
+        // Toggle admin control of screen share
+        ParticipantManager.setAdminViewState('screenShareFullScreen', identity);
+        broadcastAdminViewState({ 
+          viewMode: 'screenShareFullScreen', 
+          targetParticipantId: identity 
+        });
+        updateGrid();
+      });
+      infoBar.appendChild(adminControlButton);
+    }
+  }
+}
+
+// Create a participant tile
+function createParticipantTile(participant, isLocal, heightClass, isAdmin = false, isExpanded = false, customContainer = null) {
+  try {
+    // Create the tile element
+    const tile = document.createElement('div');
+    tile.id = `participant-${participant.identity}`;
+
+    // Apply appropriate classes
+    const speakerClass = participant.speaking ? 'active-speaker' : '';
+    tile.className = `bg-gray-800 rounded-lg ${heightClass} participant-box ${speakerClass} relative`;
+    
+    // Create video container
+    const videoContainer = document.createElement('div');
+    videoContainer.className = 'absolute inset-0 overflow-hidden';
+    tile.appendChild(videoContainer);
+    
+    // Add the tile to the container (either videoGrid or a custom container)
+    if (customContainer) {
+      customContainer.appendChild(tile);
+    } else {
+      videoGrid.appendChild(tile);
+    }
+    
+    // Attach video track if available
+    const videoPublication = participant.getTrackPublication(LivekitClient.Track.Source.Camera);
+    if (videoPublication && videoPublication.track && !videoPublication.isMuted) {
+      const videoElement = videoPublication.track.attach();
+      videoElement.autoplay = true;
+      videoElement.playsInline = true;
+      videoElement.className = 'w-full h-full object-contain';
+      
+      // If this is the local participant, mirror the video
+      if (isLocal) {
+        videoElement.style.transform = 'scaleX(-1)';
+      }
+      
+      videoContainer.appendChild(videoElement);
+    } else {
+      // If no video, show avatar or initials
+      const avatar = document.createElement('div');
+      avatar.className = 'w-full h-full flex items-center justify-center bg-gray-700 text-white text-4xl font-bold';
+      avatar.textContent = participant.identity.charAt(0).toUpperCase();
+      videoContainer.appendChild(avatar);
+    }
+    
+    // Create info bar
+    const infoBar = document.createElement('div');
+    infoBar.className = 'absolute bottom-0 left-0 right-0 bg-gray-900 bg-opacity-70 p-2 flex justify-between items-center z-10';
+    
+    // Participant name with admin star if applicable
+    const nameOverlay = document.createElement('span');
+    nameOverlay.className = 'text-white text-sm';
+    
+    // Add admin star next to admin names
+    if (isAdmin) {
+      nameOverlay.innerHTML = `${isLocal ? participant.identity + ' (You)' : participant.identity} <span class="lk-admin-star ml-1 text-yellow-400">★</span>`;
+    } else {
+      nameOverlay.textContent = isLocal ? `${participant.identity} (You)` : participant.identity;
+    }
+    infoBar.appendChild(nameOverlay);
+    
+    // Indicators container
+    const indicators = document.createElement('div');
+    indicators.className = 'flex items-center gap-2';
+    
+    // Audio indicator
+    const audioIndicator = document.createElement('div');
+    audioIndicator.className = 'h-4 w-4 rounded-full bg-red-500';
+    audioIndicator.id = `audio-indicator-${participant.identity}`;
+    
+    // Update audio indicator based on track state
+    const audioPublication = participant.getTrackPublication(LivekitClient.Track.Source.Microphone);
+    if (audioPublication && !audioPublication.isMuted) {
+      audioIndicator.classList.add('bg-green-500');
+      audioIndicator.classList.remove('bg-red-500');
+    }
+    
+    indicators.appendChild(audioIndicator);
+    
+    // Add expand button if not already expanded
+    if (!isExpanded) {
+      const expandButton = document.createElement('button');
+      expandButton.className = 'expand-button text-white p-1 bg-gray-700 hover:bg-gray-600 rounded absolute top-2 right-2 z-10';
+      expandButton.innerHTML = `
+        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <polyline points="15 3 21 3 21 9"></polyline>
+          <polyline points="9 21 3 21 3 15"></polyline>
+          <line x1="21" y1="3" x2="14" y2="10"></line>
+          <line x1="3" y1="21" x2="10" y2="14"></line>
+        </svg>
+      `;
+      expandButton.addEventListener('click', (event) => {
+        event.stopPropagation();
+        toggleExpandedView(participant.identity);
+      });
+      tile.appendChild(expandButton); // Append directly to the tile instead of indicators
+    }
+    
+    // Add admin control button for admins
+    if (ParticipantManager.isCurrentUserAdmin() && !isLocal) {
+      const adminControlButton = document.createElement('button');
+      adminControlButton.className = 'admin-control-button text-white p-1 bg-purple-700 hover:bg-purple-600 rounded ml-1';
+      adminControlButton.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"></path></svg>';
+      adminControlButton.title = "Make this view visible to all participants";
+      adminControlButton.addEventListener('click', (event) => {
+        event.stopPropagation();
+        // Toggle admin control of participant view
+        ParticipantManager.setAdminViewState('expanded', participant.identity);
+        broadcastAdminViewState({
+          viewMode: 'expanded',
+          targetParticipantId: participant.identity
+        });
+        updateGrid();
+      });
+      indicators.appendChild(adminControlButton);
+    }
+    
+    infoBar.appendChild(indicators);
+    tile.appendChild(infoBar);
+    
+    return tile;
+  } catch (error) {
+    console.error('Error creating participant tile:', error);
+    return null;
+  }
+}
+
+// Toggle screen sharing
+async function toggleScreenShare() {
+  if (!room) return;
+  
+  try {
+    if (screenShareTrack) {
+      // Stop screen sharing
+      console.log('Stopping screen sharing');
+      
+      // Stop the track
+      screenShareTrack.stop();
+      
+      // Unpublish the track
+      await room.localParticipant.unpublishTrack(screenShareTrack);
+      
+      // Reset screen share state
+      screenShareTrack = null;
+      
+      // If this was the active screen share, reset it
+      if (activeScreenShareId === room.localParticipant.identity) {
+        activeScreenShareId = null;
+      }
+      
+      // Update participant manager to remove the screen share
+      ParticipantManager.updateScreenShare(room.localParticipant, null, false);
+      
+      // If we're in fullscreen mode for this screenshare, exit it
+      if (localViewState.isScreenShareFullScreen && 
+          localViewState.screenShareParticipantId === room.localParticipant.identity) {
+        localViewState.isScreenShareFullScreen = false;
+        localViewState.screenShareParticipantId = null;
+      }
+      
+      // Remove any screen share tiles for this participant
+      const screenTile = document.getElementById(`screen-${room.localParticipant.identity}`);
+      if (screenTile) {
+        screenTile.remove();
+      }
+      
+      // Update button
+      updateScreenShareButton(false);
+      
+      // Force a complete grid update to reorganize tiles
+      ParticipantManager.scheduleGridUpdate();
+      
+      return;
+    }
+    
+    // Start screen sharing
+    console.log('Starting screen sharing');
+    
+    // Create screen share track
+    screenShareTrack = await LivekitClient.LocalVideoTrack.createScreenShareTrack({
+      resolution: {
+        width: 1920,
+        height: 1080,
+        frameRate: 30
+      }
+    });
+    
+    // Add handler for track stopped externally (browser UI)
+    screenShareTrack.on(LivekitClient.Track.Event.Ended, async () => {
+      console.log('Screen share track ended');
+      
+      // Only proceed if we still have a room and participant
+      if (room && room.localParticipant) {
+        try {
+          // Unpublish track
+          await room.localParticipant.unpublishTrack(screenShareTrack);
+          
+          // Reset screen share state
+          screenShareTrack = null;
+          
+          // If this was the active screen share, reset it
+          if (activeScreenShareId === room.localParticipant.identity) {
+            activeScreenShareId = null;
+          }
+          
+          // Update participant manager to remove the screen share
+          ParticipantManager.updateScreenShare(room.localParticipant, null, false);
+          
+          // If we're in fullscreen mode for this screenshare, exit it
+          if (localViewState.isScreenShareFullScreen && 
+              localViewState.screenShareParticipantId === room.localParticipant.identity) {
+            localViewState.isScreenShareFullScreen = false;
+            localViewState.screenShareParticipantId = null;
+          }
+          
+          // Remove any screen share tiles for this participant
+          const screenTile = document.getElementById(`screen-${room.localParticipant.identity}`);
+          if (screenTile) {
+            screenTile.remove();
+          }
+          
+          // Update button
+          updateScreenShareButton(false);
+          
+          // Force a complete grid update to reorganize tiles
+          ParticipantManager.scheduleGridUpdate();
+        } catch (error) {
+          console.error('Error handling screen share end:', error);
+        }
+      }
+    });
+    
+    // Publish the track with metadata to ensure it's recognized as screen share
+    const publishOptions = {
+      name: 'screen',
+      source: LivekitClient.Track.Source.ScreenShare
+    };
+    
+    await room.localParticipant.publishTrack(screenShareTrack, publishOptions);
+    console.log('Published screen share track:', screenShareTrack.sid);
+    
+    // Set as active screen share
+    activeScreenShareId = room.localParticipant.identity;
+    
+    // Update participant manager
+    ParticipantManager.updateScreenShare(room.localParticipant, screenShareTrack, true);
+
+    // Update button
+    updateScreenShareButton(true);
+    
+    // Force a complete grid update to reorganize tiles
+    ParticipantManager.scheduleGridUpdate();
+    
+  } catch (error) {
+    console.error('Error toggling screen share:', error);
+    screenShareTrack = null;
+    updateScreenShareButton(false);
+    showToast('Failed to share screen: ' + error.message);
+  }
+}
+
+// Load the room
+async function connectWithToken(token, onRoomJoined = null) {
+  try {
+    console.log('Joining room with token');
+    
+    // Clear any existing connection
+    if (room) {
+      cleanupRoom();
+    }
+    
+    // Create room object
+    room = new LivekitClient.Room({
+      // Video codec to use
+      adaptiveStream: true,
+      dynacast: true,
+      publishDefaults: {
+        simulcast: true,
+        videoSimulcastLayers: [
+          { rid: 'f', scaleResolutionDownBy: 1, maxBitrate: 900000 },
+          { rid: 'h', scaleResolutionDownBy: 2, maxBitrate: 300000 },
+          { rid: 'q', scaleResolutionDownBy: 3, maxBitrate: 100000 },
+        ],
+      },
+    });
+    
+    // Set up event handlers for the room
+    setupRoomEvents();
+    
+    try {
+      // Connect to room
+      await room.connect(serverUrl, token);
+      console.log('Connected to room:', room.name);
+      
+      // Set document title
+      document.title = `LiveKit Room: ${room.name}`;
+      
+      // Get local devices
+      const audioDevices = await navigator.mediaDevices.enumerateDevices();
+      const hasAudio = audioDevices.some(device => device.kind === 'audioinput');
+      const hasVideo = audioDevices.some(device => device.kind === 'videoinput');
+      
+      console.log('Audio available:', hasAudio);
+      console.log('Video available:', hasVideo);
+      
+      // Connect local audio/video
+      const connectOptions = {
+        audio: hasAudio,
+        video: hasVideo ? { facingMode: 'user' } : false
+      };
+      
+      // Connect local tracks
+      if (hasAudio || hasVideo) {
+        await room.localParticipant.enableCameraAndMicrophone();
+        console.log('Local media enabled');
+      }
+      
+      // Update button states
+      micEnabled = hasAudio;
+      cameraEnabled = hasVideo;
+      updateMicButton();
+      updateCameraButton();
+      
+      // Hide connect modal
+      connectModal.classList.add('hidden');
+      
+      // Show all room UI
+      mainContainer.classList.remove('hidden');
+      videoGrid.innerHTML = '';
+
+      // Initialize local participant in our manager
+      if (room.localParticipant) {
+        ParticipantManager.updateParticipant(room.localParticipant, true);
+      }
+      
+      // Populate device options
+      await populateDeviceOptions();
+
+      // Get initial participants
+      console.log('Local participant:', room.localParticipant?.identity);
+      console.log('Remote participants:', Array.from(room.participants?.entries() || []).map(([key, p]) => p.identity));
+      
+      // Update connection status
+      updateConnectionStatus('Connected');
+      showToast(`Joined room: ${room.name}`);
+    } catch (error) {
+      console.error('Error connecting to room:', error);
+      updateConnectionStatus('Connection failed');
+      showToast('Failed to connect to room: ' + error.message);
+
+      // Show setup UI again
+      connectModal.classList.remove('hidden');
+    }
+  } catch (error) {
+    console.error('Error joining room:', error);
+    showToast('Failed to join room: ' + error.message);
+  }
+}
+
+// Connect to the LiveKit room
+async function tryConnect() {
+  try {
+    updateConnectionStatus('Connecting...');
+    
+    // Get values from input fields
+    const room = document.getElementById('room').value.trim();
+    const username = document.getElementById('username').value.trim();
+    
+    // Check if inputs are valid
+    if (!room) {
+      showToast('Please enter a room name');
+      return;
+    }
+    if (!username) {
+      showToast('Please enter a username');
+      return;
+    }
+    
+    // Get a token
+    try {
+      const token = await getToken(username, room);
+      await connectWithToken(token);
+    } catch (error) {
+      console.error('Error getting token:', error);
+      updateConnectionStatus('Token Error');
+      showToast('Failed to get token: ' + error.message);
+
+      // Show setup UI again
+      connectModal.classList.remove('hidden');
+    }
+  } catch (error) {
+    console.error('Error connecting:', error);
+    updateConnectionStatus('Connection Failed');
+    showToast('Failed to connect: ' + error.message);
+  }
+}
+
+// Export objects and functions for testing purposes
+// Only used in test environment
+if (typeof module !== 'undefined' && typeof module.exports !== 'undefined') {
+  module.exports = {
+    ParticipantManager,
+    determineIfAdmin,
+    handleAdminControlMessage,
+    broadcastAdminViewState,
+    setupAdminDataChannel,
+    connectWithToken,
+    joinRoom
   };
 }
