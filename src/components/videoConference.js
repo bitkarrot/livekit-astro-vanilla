@@ -1876,12 +1876,12 @@ function visualizeAudio(participant) {
 }
 
 // Highlight active speakers
-// TODO modify this to an audio bar, instead of the tile if possible
+// TODO ensure this works on expand mode tile.
 function highlightActiveSpeakers(speakers) {
   // Reset all participant tiles
   const allTiles = videoGrid.querySelectorAll('[id^="participant-"]');
   allTiles.forEach(tile => {
-    tile.classList.remove('border-2', 'border-blue-500');
+    tile.classList.remove('border-2', 'border-yellow-500');
   });
   
   // Highlight active speakers

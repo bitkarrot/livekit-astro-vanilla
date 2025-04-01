@@ -21,8 +21,18 @@
   position: relative;
 }
 
-.participant-box:hover {
+/* .participant-box:hover {
   border-color: #60A5FA;
+} */
+
+/* Speaking participant highlight - higher specificity to override hover */
+.participant-box.border-yellow-500 {
+  border-color: #F59E0B !important; /* Match Tailwind's yellow-500 */
+}
+
+/* Ensure speaking highlight takes precedence even on hover */
+.participant-box.border-yellow-500:hover {
+  border-color: #F59E0B !important;
 }
 
 /* Grid layout styles */
