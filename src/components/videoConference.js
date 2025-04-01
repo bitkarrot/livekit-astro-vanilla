@@ -248,8 +248,8 @@ async function init() {
     if (usernameParam && roomNameFromPath) {
       console.log('Direct join requested with username:', usernameParam);
       
-      // Store username for future use
-      localStorage.setItem('livekit-username', usernameParam);
+      // // Store username for future use
+      // localStorage.setItem('livekit-username', usernameParam);
       
       // Hide the connect modal immediately
       if (connectModal) {
@@ -358,7 +358,7 @@ function setupEventListeners() {
     }
     
     // Save username for future use
-    localStorage.setItem('livekit-username', username);
+    //localStorage.setItem('livekit-username', username);
     
     try {
       // Get device preferences from localStorage
