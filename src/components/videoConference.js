@@ -151,7 +151,7 @@ let audioAnalysers = new Map();
 let roomEventsBound = false;
 let participantRefreshInterval = null;
 let activeScreenShareId = null;
-let serverUrl = "wss://livekit.useguerilla.net";  // Default LiveKit server URL
+let serverUrl = "ws://localhost:7880";  // Default LiveKit server URL
 
 // Local view state
 let localViewState = {
