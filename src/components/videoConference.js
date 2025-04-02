@@ -778,11 +778,21 @@ function setupRoomEvents() {
 
       // Force a complete grid update to reorganize tiles
       ParticipantManager.scheduleGridUpdate();
+    } else {
+      // For regular audio/video tracks, try targeted update first
+      const wasUpdated = updateParticipantTile(participant, track.kind);
+
+      // Only do a full update if targeted update fails
+      if (!wasUpdated) {
+        ParticipantManager.scheduleGridUpdate();
+      }
+      
+      // Make sure participant is added to the manager
+      ParticipantManager.updateParticipant(participant, false);
     }
     
-    ParticipantManager.updateParticipant(participant, false);
-    
-    if (track.kind === LivekitClient.Track.Kind.Audio) {
+    // Setup audio visualization for audio tracks
+    if (track.kind === 'audio') {
       setupAudioVisualization(participant);
     }
   });
@@ -794,43 +804,47 @@ function setupRoomEvents() {
     if (track.source === LivekitClient.Track.Source.ScreenShare) {
       console.log('Screen share track unsubscribed from:', participant.identity);
       
-      // If this was the active screen share, reset it
-      if (activeScreenShareId === participant.identity) {
-        activeScreenShareId = null;
-      }
-      
-      // Remove the screen share tile from the DOM
-      const screenTile = document.getElementById(`screen-${participant.identity}`);
-      if (screenTile) {
-        screenTile.remove();
-      }
-      
-      // Update participant manager
+      // Update participant manager to remove screen share
       ParticipantManager.updateScreenShare(participant, null, false);
+      
+      // Early return - keep participant visible, just remove screenshare
+      const wasUpdated = updateScreenShareTile(participant, null, false);
 
-      // Return early - don't remove the participant when their screenshare is unsubscribed
+      // If tile couldn't be updated specifically, do a full grid update
+      if (!wasUpdated) {
+        // If this was the active screen share in fullscreen mode, reset the view
+        if (localViewState.isScreenShareFullScreen && 
+            localViewState.screenShareParticipantId === participant.identity) {
+          localViewState.isScreenShareFullScreen = false;
+          localViewState.screenShareParticipantId = null;
+        }
+
+        // Force a complete grid update
+        ParticipantManager.scheduleGridUpdate();
+      }
+      
       return;
     }
     
-    ParticipantManager.removeParticipant(participant.identity);
+    // For regular tracks, try targeted update
+    const wasUpdated = updateParticipantTile(participant, track.kind);
+
+    // Only do a full update if targeted update fails
+    if (!wasUpdated) {
+      ParticipantManager.scheduleGridUpdate();
+    }
   });
   
+  // Track mute/unmute events for incremental updates
   room.on(LivekitClient.RoomEvent.TrackMuted, (publication, participant) => {
     console.log('Track muted:', publication.kind, 'from', participant.identity);
     
-    // Special handling for screen share tracks
-    if (publication.source === LivekitClient.Track.Source.ScreenShare) {
-      console.log('Screen share track muted from:', participant.identity);
-      
-      // If this was the active screen share, handle it similar to unsubscribe
-      if (activeScreenShareId === participant.identity) {
-        // Force a complete grid update to reorganize tiles
-        ParticipantManager.scheduleGridUpdate();
-      }
-    }
+    // Try to update just the specific tile first
+    const trackKind = publication.kind;
+    const wasUpdated = updateParticipantTile(participant, trackKind);
     
-    // Only update grid if the room is still connected
-    if (room && room.state === LivekitClient.ConnectionState.Connected) {
+    // If the targeted update fails, fall back to full grid update
+    if (!wasUpdated) {
       ParticipantManager.scheduleGridUpdate();
     }
   });
@@ -838,22 +852,12 @@ function setupRoomEvents() {
   room.on(LivekitClient.RoomEvent.TrackUnmuted, (publication, participant) => {
     console.log('Track unmuted:', publication.kind, 'from', participant.identity);
     
-    // Special handling for screen share tracks
-    if (publication.source === LivekitClient.Track.Source.ScreenShare) {
-      console.log('Screen share track unmuted from:', participant.identity);
-      
-      // Set as active screen share
-      activeScreenShareId = participant.identity;
-      
-      // Update participant manager
-      ParticipantManager.updateScreenShare(participant, publication.track, true);
-
-      // Force a complete grid update to reorganize tiles
-      ParticipantManager.scheduleGridUpdate();
-    }
+    // Try to update just the specific tile first
+    const trackKind = publication.kind;
+    const wasUpdated = updateParticipantTile(participant, trackKind);
     
-    // Only update grid if the room is still connected
-    if (room && room.state === LivekitClient.ConnectionState.Connected) {
+    // If the targeted update fails, fall back to full grid update
+    if (!wasUpdated) {
       ParticipantManager.scheduleGridUpdate();
     }
   });
@@ -2453,235 +2457,168 @@ function createParticipantTile(participant, isLocal, heightClass, isAdmin = fals
   }
 }
 
-// Toggle screen sharing
-async function toggleScreenShare() {
-  if (!room) return;
-  
+// Update a single participant tile without rebuilding the entire grid
+function updateParticipantTile(participant, trackKind) {
   try {
-    if (screenShareTrack) {
-      // Stop screen sharing
-      console.log('Stopping screen sharing');
-      
-      // Stop the track
-      screenShareTrack.stop();
-      
-      // Unpublish the track
-      await room.localParticipant.unpublishTrack(screenShareTrack);
-      
-      // Reset screen share state
-      screenShareTrack = null;
-      
-      // If this was the active screen share, reset it
-      if (activeScreenShareId === room.localParticipant.identity) {
-        activeScreenShareId = null;
-      }
-      
-      // Update participant manager to remove the screen share
-      ParticipantManager.updateScreenShare(room.localParticipant, null, false);
-      
-      // If we're in fullscreen mode for this screenshare, exit it
-      if (localViewState.isScreenShareFullScreen && 
-          localViewState.screenShareParticipantId === room.localParticipant.identity) {
-        localViewState.isScreenShareFullScreen = false;
-        localViewState.screenShareParticipantId = null;
-      }
-      
-      // Remove any screen share tiles for this participant
-      const screenTile = document.getElementById(`screen-${room.localParticipant.identity}`);
-      if (screenTile) {
-        screenTile.remove();
-      }
-      
-      // Update button
-      updateScreenShareButton(false);
-      
-      // Force a complete grid update to reorganize tiles
-      ParticipantManager.scheduleGridUpdate();
-      
-      return;
+    if (!participant) return false;
+    
+    console.log(`Updating specific tile for ${participant.identity}, track kind: ${trackKind}`);
+    
+    // Find the existing participant tile
+    const tileId = `participant-${participant.identity}`;
+    const existingTile = document.getElementById(tileId);
+    
+    if (!existingTile) {
+      console.log(`Tile for ${participant.identity} not found, skipping targeted update`);
+      return false;
     }
     
-    // Start screen sharing
-    console.log('Starting screen sharing');
+    // Find the elements we need to update
+    const videoContainer = existingTile.querySelector('.video-container');
+    const audioIcon = existingTile.querySelector('.mic-status');
+    const videoIcon = existingTile.querySelector('.camera-status');
     
-    // Create screen share track
-    screenShareTrack = await LivekitClient.LocalVideoTrack.createScreenShareTrack({
-      resolution: {
-        width: 1920,
-        height: 1080,
-        frameRate: 30
-      }
-    });
+    if (!videoContainer || !audioIcon || !videoIcon) {
+      console.log(`Required elements not found in tile ${tileId}, skipping targeted update`);
+      return false;
+    }
     
-    // Add handler for track stopped externally (browser UI)
-    screenShareTrack.on(LivekitClient.Track.Event.Ended, async () => {
-      console.log('Screen share track ended');
+    // Update only what changed
+    if (trackKind === 'audio' || trackKind === 'all') {
+      // Update audio status
+      const isAudioMuted = !participant.audioTrack || participant.audioTrack.isMuted;
+      audioIcon.innerHTML = isAudioMuted ? 
+        '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="1" y1="1" x2="23" y2="23"></line><path d="M9 9v3a3 3 0 0 0 5.12 2.12M15 9.34V4a3 3 0 0 0-5.94-.6"></path><path d="M17 16.95A7 7 0 0 1 5 12v-2m14 0v2a7 7 0 0 1-.11 1.23"></path><line x1="12" y1="19" x2="12" y2="23"></line><line x1="8" y1="23" x2="16" y2="23"></line></svg>' : 
+        '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"></path><path d="M19 10v2a7 7 0 0 1-14 0v-2"></path><line x1="12" y1="19" x2="12" y2="23"></line><line x1="8" y1="23" x2="16" y2="23"></line></svg>';
       
-      // Only proceed if we still have a room and participant
-      if (room && room.localParticipant) {
-        try {
-          // Unpublish track
-          await room.localParticipant.unpublishTrack(screenShareTrack);
-          
-          // Reset screen share state
-          screenShareTrack = null;
-          
-          // If this was the active screen share, reset it
-          if (activeScreenShareId === room.localParticipant.identity) {
-            activeScreenShareId = null;
-          }
-          
-          // Update participant manager to remove the screen share
-          ParticipantManager.updateScreenShare(room.localParticipant, null, false);
-          
-          // If we're in fullscreen mode for this screenshare, exit it
-          if (localViewState.isScreenShareFullScreen && 
-              localViewState.screenShareParticipantId === room.localParticipant.identity) {
-            localViewState.isScreenShareFullScreen = false;
-            localViewState.screenShareParticipantId = null;
-          }
-          
-          // Remove any screen share tiles for this participant
-          const screenTile = document.getElementById(`screen-${room.localParticipant.identity}`);
-          if (screenTile) {
-            screenTile.remove();
-          }
-          
-          // Update button
-          updateScreenShareButton(false);
-          
-          // Force a complete grid update to reorganize tiles
-          ParticipantManager.scheduleGridUpdate();
-        } catch (error) {
-          console.error('Error handling screen share end:', error);
+      // Update audio element if needed
+      const audioTrack = participant.audioTrack?.mediaTrack;
+      if (audioTrack) {
+        let audioElement = existingTile.querySelector('audio');
+        if (!audioElement) {
+          audioElement = document.createElement('audio');
+          audioElement.autoplay = true;
+          audioElement.id = `audio-${participant.identity}`;
+          existingTile.appendChild(audioElement);
+        }
+        
+        // Only replace if the track changed
+        if (audioElement.srcObject !== audioTrack) {
+          audioElement.srcObject = new MediaStream([audioTrack]);
         }
       }
-    });
+    }
     
-    // Publish the track with metadata to ensure it's recognized as screen share
-    const publishOptions = {
-      name: 'screen',
-      source: LivekitClient.Track.Source.ScreenShare
-    };
+    if (trackKind === 'video' || trackKind === 'all') {
+      // Update video status
+      const isVideoMuted = !participant.videoTrack || participant.videoTrack.isMuted;
+      videoIcon.innerHTML = isVideoMuted ? 
+        '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="1" y1="1" x2="23" y2="23"></line><path d="M15.24 2.58L22 4.54v14.91L15.24 21.4"></path><path d="M8.34 4.54a3 3 0 0 1 4.32 0L16 8.09v7.81l-3.91 3.83a3 3 0 0 1-4.32 0L4 15.9V8.09l4.34-3.55z"></path></svg>' : 
+        '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="23 7 16 12 23 17 23 7"></polygon><rect x="1" y="5" width="15" height="14" rx="2" ry="2"></rect></svg>';
+      
+      // Update video element
+      let videoElement = videoContainer.querySelector('video');
+      
+      if (isVideoMuted) {
+        // If video is muted, show avatar instead
+        videoContainer.classList.add('bg-gray-800');
+        if (videoElement) {
+          videoElement.style.display = 'none';
+        }
+        
+        // Show avatar/initials
+        let avatarElement = videoContainer.querySelector('.avatar');
+        if (!avatarElement) {
+          avatarElement = document.createElement('div');
+          avatarElement.className = 'avatar flex items-center justify-center h-full';
+          
+          const initials = participant.identity.substring(0, 2).toUpperCase();
+          avatarElement.innerHTML = `<div class="text-2xl font-bold text-white">${initials}</div>`;
+          videoContainer.appendChild(avatarElement);
+        }
+      } else {
+        // If video is enabled, show video
+        videoContainer.classList.remove('bg-gray-800');
+        
+        // Remove avatar if it exists
+        const avatarElement = videoContainer.querySelector('.avatar');
+        if (avatarElement) {
+          avatarElement.remove();
+        }
+        
+        // Add or update video element
+        const videoTrack = participant.videoTrack?.mediaTrack;
+        if (videoTrack) {
+          if (!videoElement) {
+            videoElement = document.createElement('video');
+            videoElement.autoplay = true;
+            videoElement.playsInline = true;
+            videoElement.id = `video-${participant.identity}`;
+            videoElement.className = 'w-full h-full object-cover';
+            videoContainer.appendChild(videoElement);
+          } else {
+            videoElement.style.display = 'block';
+          }
+          
+          // Only replace if the track changed
+          if (videoElement.srcObject !== videoTrack) {
+            videoElement.srcObject = new MediaStream([videoTrack]);
+          }
+        }
+      }
+    }
     
-    await room.localParticipant.publishTrack(screenShareTrack, publishOptions);
-    console.log('Published screen share track:', screenShareTrack.sid);
-    
-    // Set as active screen share
-    activeScreenShareId = room.localParticipant.identity;
-    
-    // Update participant manager
-    ParticipantManager.updateScreenShare(room.localParticipant, screenShareTrack, true);
-
-    // Update button
-    updateScreenShareButton(true);
-    
-    // Force a complete grid update to reorganize tiles
-    ParticipantManager.scheduleGridUpdate();
-    
+    return true;
   } catch (error) {
-    console.error('Error toggling screen share:', error);
-    screenShareTrack = null;
-    updateScreenShareButton(false);
-    showToast('Failed to share screen: ' + error.message);
+    console.error('Error updating participant tile:', error);
+    return false;
   }
 }
 
-// Load the room
-async function connectWithToken(token, onRoomJoined = null) {
+// Update a single screenshare tile without rebuilding the entire grid
+function updateScreenShareTile(participant, track, isActive) {
   try {
-    console.log('Joining room with token');
+    if (!participant) return false;
     
-    // Clear any existing connection
-    if (room) {
-      cleanupRoom();
+    console.log(`Updating specific screenshare for ${participant.identity}, active: ${isActive}`);
+    
+    // Find the existing screenshare tile
+    const tileId = `screen-${participant.identity}`;
+    const existingTile = document.getElementById(tileId);
+    
+    if (isActive && track) {
+      if (existingTile) {
+        // Update existing tile
+        const videoContainer = existingTile.querySelector('.video-container');
+        if (videoContainer) {
+          let videoElement = videoContainer.querySelector('video');
+          if (!videoElement) {
+            videoElement = document.createElement('video');
+            videoElement.autoplay = true;
+            videoElement.muted = true;
+            videoElement.playsInline = true;
+            videoElement.className = 'w-full h-full object-contain';
+            videoContainer.appendChild(videoElement);
+          }
+          
+          // Replace track
+          if (videoElement.srcObject !== track.mediaTrack) {
+            videoElement.srcObject = new MediaStream([track.mediaTrack]);
+          }
+        }
+      } else {
+        // If tile doesn't exist, we need to create it via grid update
+        return false;
+      }
+    } else if (existingTile) {
+      // Remove the tile
+      existingTile.remove();
     }
     
-    // Create room object
-    room = new LivekitClient.Room({
-      // Video codec to use
-      adaptiveStream: true,
-      dynacast: true,
-      publishDefaults: {
-        simulcast: true,
-        videoSimulcastLayers: [
-          { rid: 'f', scaleResolutionDownBy: 1, maxBitrate: 900000 },
-          { rid: 'h', scaleResolutionDownBy: 2, maxBitrate: 300000 },
-          { rid: 'q', scaleResolutionDownBy: 3, maxBitrate: 100000 },
-        ],
-      },
-    });
-    
-    // Set up event handlers for the room
-    setupRoomEvents();
-    
-    try {
-      // Connect to room
-      await room.connect(serverUrl, token);
-      console.log('Connected to room:', room.name);
-      
-      // Set document title
-      document.title = `LiveKit Room: ${room.name}`;
-      
-      // Get local devices
-      const audioDevices = await navigator.mediaDevices.enumerateDevices();
-      const hasAudio = audioDevices.some(device => device.kind === 'audioinput');
-      const hasVideo = audioDevices.some(device => device.kind === 'videoinput');
-      
-      console.log('Audio available:', hasAudio);
-      console.log('Video available:', hasVideo);
-      
-      // Connect local audio/video
-      const connectOptions = {
-        audio: hasAudio,
-        video: hasVideo ? { facingMode: 'user' } : false
-      };
-      
-      // Connect local tracks
-      if (hasAudio || hasVideo) {
-        await room.localParticipant.enableCameraAndMicrophone();
-        console.log('Local media enabled');
-      }
-      
-      // Update button states
-      micEnabled = hasAudio;
-      cameraEnabled = hasVideo;
-      updateMicButton();
-      updateCameraButton();
-      
-      // Hide connect modal
-      connectModal.classList.add('hidden');
-      
-      // Show all room UI
-      mainContainer.classList.remove('hidden');
-      videoGrid.innerHTML = '';
-
-      // Initialize local participant in our manager
-      if (room.localParticipant) {
-        ParticipantManager.updateParticipant(room.localParticipant, true);
-      }
-      
-      // Populate device options
-      await populateDeviceOptions();
-
-      // Get initial participants
-      console.log('Local participant:', room.localParticipant?.identity);
-      console.log('Remote participants:', Array.from(room.participants?.entries() || []).map(([key, p]) => p.identity));
-      
-      // Update connection status
-      updateConnectionStatus('Connected');
-      showToast(`Joined room: ${room.name}`);
-    } catch (error) {
-      console.error('Error connecting to room:', error);
-      updateConnectionStatus('Connection failed');
-      showToast('Failed to connect to room: ' + error.message);
-
-      // Show setup UI again
-      connectModal.classList.remove('hidden');
-    }
+    return true;
   } catch (error) {
-    console.error('Error joining room:', error);
-    showToast('Failed to join room: ' + error.message);
+    console.error('Error updating screenshare tile:', error);
+    return false;
   }
 }
 
@@ -2694,7 +2631,6 @@ if (typeof module !== 'undefined' && typeof module.exports !== 'undefined') {
     handleAdminControlMessage,
     broadcastAdminViewState,
     setupAdminDataChannel,
-    connectWithToken,
     joinRoom
   };
 }
